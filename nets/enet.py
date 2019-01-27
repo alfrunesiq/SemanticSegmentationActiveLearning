@@ -69,43 +69,27 @@ class ENet:
                                   name="Concat")
         return out, [kern]
 
-    def _max_unpool(self, inputs, max_pool_indices, name="MaxUnpool"):
-        """FIXME! briefly describe function
-
-        :param inputs: 
-        :param max_pool_indices: 
-        :param name: 
-        :returns: 
-        :rtype: (tf.Tensor, dict)
-
-        """
-        with tf.name_scope("MaxUnpool"):
-            with tf.name_scope("ShapeOps"):
-                in_shape = tf.shape(inputs)
-                out_shape = in_shape * tf.constant([1,2,2,1])
-            out = tf.manip.scatter_nd(max_pool_indices, inputs, \
-                                      out_shape, name="MaxUnpool")
-        return out
-
     def _batch_normalization(self, inputs, is_training=True, momentum=0.9):
         params = {}
         with tf.variable_scope("BatchNorm"):
-            params["Mean"] = tf.get_variable(shape=[filters], \
+            with tf.name_scope("ShapeOps"):
+                input_ch = tf.shape(inputs)[-1]
+            params["Mean"] = tf.get_variable(shape=[input_ch], \
                                              initializer=tf.zeros_initializer(), \
                                              trainable=False, \
                                              dtype=tf.float32, \
                                              name="Mean")
-            params["Variance"] = tf.get_variable(shape=[filters], \
+            params["Variance"] = tf.get_variable(shape=[input_ch], \
                                                  initializer=tf.ones_initializer(), \
                                                  dtype=tf.float32, \
                                                  trainable=False, \
                                                  name="Variance")
-            params["Beta"] = tf.get_variable(shape=[filters],
+            params["Beta"] = tf.get_variable(shape=[input_ch],
                                              initializer=tf.zeros_initializer(), \
                                              trainable=True, \
                                              dtype=tf.float32, \
                                              name="Beta")
-            params["Gamma"] = tf.get_variable(shape=[filters],
+            params["Gamma"] = tf.get_variable(shape=[input_ch],
                                              initializer=tf.ones_initializer(), \
                                              trainable=True, \
                                              dtype=tf.float32, \
@@ -126,393 +110,538 @@ class ENet:
 
         return out, params
 
-
-    def _conv2d(self, inputs, kernel_shape, \
-                strides=[1,1,1,1], \
-                padding="SAME", \
-                use_bias=False, \
-                name="Conv"):
-        """FIXME! briefly describe function
+    def _block_bottleneck(self, inputs, input_shape, \
+                          padding="SAME", \
+                          projection_rate=4, \
+                          dilations=[1,1,1,1], \
+                          is_training=True, \
+                          bn_momentum=0.90, \
+                          kernel_initializer=tf.initializers.glorot_uniform(), \
+                          alpha_initializer=tf.initializers.constant(0.25), \
+                          name="Bottleneck"):
+        """
+        Implements the plain bottleneck module in ENet, including possibility
+        of dilated convolution.
+                     +-------+
+                     | Input |
+                     +-------+
+                         ||
+            +------------++----------+
+            |                        |
+            |           +-------------------------+
+            |           |         1x1 conv        |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            |           +-------------------------+
+            |                        | Projection
+            |                        V
+            |           +-------------------------+
+            |           |         3x3 conv        |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            |           +-------------------------+
+            |                        | Convolution
+            |                        V
+            |           +-------------------------+
+            |           |        1x1 conv         |
+            |           |      x(input_ch)        |
+            |           |     -> BatchNorm        |
+            |           +-------------------------+
+            |                        | Expansion
+            +------------++----------+
+                         \/ Residual connection
+                   +-----------+
+                   |    Add    |
+                   | -> PReLU  |
+                   +-----------+
 
         :param inputs:
-        :param kernel_shape:
-        :param strides:
+        :param input_shape:
         :param padding:
-        :param use_bn:
-        :param use_bias:
+        :param projection_rate:
+        :param dilations:
         :param name:
         :returns:
-        :rtype: (tf.Tensor, dict)
+        :rtype:
+
         """
-        params = {}
+        variables = {}   # Dict with Variables in the block
+        out       = None
         with tf.variable_scope(name):
-            kern = tf.get_variable(name="Kernel", \
-                                   shape=kernel_shape, \
-                                   initializer= \
-                                   tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                   trainable=True)
-            out = tf.nn.conv2d(inputs, kern, \
-                               strides=strides, \
-                               padding=padding, \
-                               name="Conv2D")
-            params["Kernel"] = kern
-            if use_bias:
-                bias = tf.get_variable("Bias", shape=kernel_shape[0])
-                out = tf.nn.bias_add(out, bias, name="BiasAdd")
-                params["Bias"] = bias
-        return out, params
+
+            with tf.name_scope("ShapeOps"):
+                # Get input channel count
+                input_ch = tf.shape(inputs, name="InputShape")[-1]
+                # Number of filters in the bottleneck are reduced by a factor of
+                # @projection_rate
+                bneck_filters = input_ch / projection_rate
+                # Get conv. kernels' shape
+                proj_kern_shape = tf.stack([bneck_filters,1,1,input_ch], \
+                                           name="DownProjectShape")
+                conv_kern_shape  = tf.stack([bneck_filters,3,3,bneck_filters], \
+                                       name="ConvShape")
+                exp_kern_shape = tf.stack([input_ch,1,1,bneck_filters], \
+                                           name="ExpansionShape")
+                # END scope ShapeOps
+
+            ############ Main Branch ############
+            with tf.variable_scope("DownProject"):
+                # Bottleneck projection operation
+                alpha = tf.get_variable(name="Alpha", \
+                                        dtype=tf.float32, \
+                                        initializer=alpha_initializer, \
+                                        shape=[bneck_filters], \
+                                        trainable=True)
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=proj_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d(inputs, kern, \
+                                   strides=[1,1,1,1], \
+                                   padding=padding, \
+                                   name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                xops.prelu(out, alpha, name="PReLU")
+                variables["DownProject"] = {}
+                variables["DownProject"]["Kernel"] = kern
+                variables["DownProject"]["Alpha"] = alpha
+                variables["DownProject"]["BatchNorm"] = bn_params
+
+            with tf.variable_scope("Conv"):
+                # Main convolution operation
+                alpha = tf.get_variable(name="Alpha", \
+                                        dtype=tf.float32, \
+                                        initializer=alpha_initializer, \
+                                        shape=[bneck_filters], \
+                                        trainable=True)
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=conv_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d(out, kern, \
+                                   strides=[1,1,1,1], \
+                                   padding=padding, \
+                                   dilations=dilations, \
+                                   name="Conv2D")
+
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                out = xops.prelu(out, alpha, name="PReLU")
+
+                variables["Conv"] = {}
+                variables["Conv"]["Kernel"] = kern
+                variables["Conv"]["Alpha"]  = alpha
+                variables["Conv"]["BatchNorm"] = bn_params
+            # END scope Conv
+
+            with tf.variable_scope("Expansion"):
+                # Feature expansion operation
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=exp_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d(out, kern, \
+                                   strides=[1,1,1,1], \
+                                   padding=padding, \
+                                   name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                variables["Expansion"] = {}
+                variables["Expansion"]["Kernel"] = kern
+                variables["Expansion"]["BatchNorm"] = bn_params
+                # NOTE: no prelu here
+            # TODO: add spatial dropout here if is_training == True
+            #####################################
+
+            alpha = tf.get_variable(name="Alpha", \
+                                    dtype=tf.float32, \
+                                    initializer=alpha_initializer, \
+                                    variables["Conv"]["BatchNorm"] = bn_params
+                                    shape=[bneck_filters], \
+                                    trainable=True)
+            # NOTE: out comes from main branch
+            out = tf.add(inputs, out, name="Residual")
+            out = xops.prelu(out, alpha, name="PReLU")
+            variables["Alpha"] = alpha
+
+            # end tf.variable_scope(name)
+
+        return out, variables
+    # END _block_bottleneck
 
 
-    #TODO implement this using the functions above
-    #TODO also create separate bottleneck blocks for down- and upsampling respectively
-    #      - the latter uses tf.nn.conv2d_transpose and tf.manip.scatter_nd respectively
-    def _block_bottleneck(self, inputs, input_shape, filters, \
-                          padding="SAME", \
-                          separable_conv=False, \
-                          bottleneck_factor=4, \
-                          dilations=[1,1,1,1], \
-                          name="Bottleneck"):
-        """FIXME! briefly describe function
-
+    def _block_bottleneck_upsample(self, inputs, unpool_argmax, \
+                                   padding="SAME", \
+                                   projection_rate=4, \
+                                   dilations=[1,1,1,1], \
+                                   name="BottleneckUpsample"):
+        """
+                     +-------+
+                     | Input |
+                     +-------+
+                         ||
+            +------------++----------+
+            |                        |
+            |           +-------------------------+
+            |           |       2x2/s2 conv       |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            |           +-------------------------+
+            |                        | Projection
+            |                        V
+            |           +-------------------------+
+            |           |         3x3 conv        |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            |           +-------------------------+
+            |                        | Convolution
+            |                        V
+            |           +-------------------------+
+            |           |        1x1 conv         |
+            |           |      x(2*input_ch)      |
+            |           |     -> BatchNorm        |
+            |           +-------------------------+
+            |                        | Expansion
+            +------------++----------+
+                         \/ Residual connection
+                   +-----------+
+                   |    Add    |
+                   | -> PReLU  |
+                   +-----------+
         :param inputs: 
-        :param input_shape: 
-        :param filters: 
         :param padding: 
-        :param separable_conv: 
-        :param bottleneck_factor: 
-        :param dilations: 
+        :param projection_rate: 
         :param name: 
         :returns: 
         :rtype: 
 
         """
+
         variables = {}   # Dict with Variables in the block
         out       = None
         with tf.variable_scope(name):
 
             with tf.name_scope("ShapeOps"):
                 # Get input channel count
-                input_ch = tf.shape(inputs, name="InputShape")[3]
+                input_shape = tf.shape(inputs, name="InputShape")
+                input_ch    = input_shape[3]
                 # Number of filters in the bottleneck are reduced by a factor of
-                # @bottleneck_factor
-                bneck_filters = filters / bottleneck_factor
-                # Get conv. kernels
-                if downsampling:
-                    down_proj_shape = tf.stack([bneck_filters,2,2,input_ch], \
-                                               name="DownProjectShape")
-                    zero_paddings   = tf.stack([0,0,0,filters - input_ch])
-                else:
-                    down_proj_shape = tf.stack([bneck_filters,1,1,input_ch], \
-                                               name="DownProjectShape")
-                if separable_conv:
-                    conv_shape = [tf.stack([bneck_filters,1,5,bneck_filters], \
-                                           name="ConvRowShape"), \
-                                  tf.stack([bneck_filters,5,1,bneck_filters], \
-                                           name="ConvColShape")]
-                else: #(default)
-                    conv_shape  = tf.stack([bneck_filters,3,3,bneck_filters], \
-                                           name="ConvShape")
-                expansion_shape = tf.stack([filters,1,1,bneck_filters], \
-                                           name="ExpansionShape")
-                # END ShapeOps
-
-            ############ Main Branch ############
-            with tf.variable_scope("DownProject"):
-                # Bottleneck projection operation
-                alpha = tf.get_variable(name="Alpha", \
-                                        initializer= \
-                                        tf.initializers.constant(0.25, \
-                                                                 dtype=tf.float32)
-                                        shape=bneck_filters, \
-                                        trainable=True)
-                kern = tf.get_variable(name="Kernel", \
-                                       initializer= \
-                                       tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                       shape=down_proj_shape, \
-                                       trainable=True)
-                variables["DownProject"] = {}
-                variables["DownProject"]["Kernel"] = kern
-                variables["DownProject"]["Alpha"] = alpha
-                if downsampling:
-                    out = tf.nn.conv2d(inputs, kern, \
-                                       strides=[1,2,2,1], \
-                                       padding=padding, \
-                                       name="Conv2D")
-                else: #(default)
-                    out = tf.nn.conv2d(inputs, kern, \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       name="Conv2D")
-                xops.prelu(out, alpha, name="PReLU")
-
-            with tf.variable_scope("Conv"):
-                # Main convolution operation
-                alpha = tf.get_variable(name="Alpha", \
-                                        initializer= \
-                                        tf.initializers.constant(0.25, \
-                                                                 dtype=tf.float32)
-                                        shape=bneck_filters, \
-                                        trainable=True)
-                bias  = tf.get_variable(name="BiasCol", \
-                                        initializer= \
-                                        tf.initializers.zeros(dtype=tf.float32), \
-                                        shape=bneck_filters, \
-                                        trainable=True) \
-                if separable_conv:
-                    kern = [ \
-                        tf.get_variable(name="KernelRow", \
-                                        initializer= \
-                                        tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                        shape=conv_shape[0], \
-                                        trainable=True), \
-                        tf.get_variable(name="KernelCol", \
-                                        initializer= \
-                                        tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                        shape=conv_shape[1], \
-                                        trainable=True) \
-                    ]
-                    bias = tf.get_variable(name="BiasCol", \
-                                           initializer= \
-                                           tf.initializers.zeros(dtype=tf.float32), \
-                                           shape=bneck_filters, \
-                                           trainable=True)
-                    # Separable convolution:
-                    out = tf.nn.conv2d(out, kern[0], \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       dilations=dilations, \
-                                       name="ConvRow")
-                    out = tf.nn.conv2d(out, kern[1], \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       dilations=dilations, \
-                                       name="ConvCol")
-
-                else: #(defalut)
-                    kern = tf.get_variable(name="Kernel", \
-                                           initializer= \
-                                           tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                           shape=conv_shape, \
-                                           trainable=True)
-                    out = tf.nn.conv2d(out, kern, \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       dilations=dilations, \
-                                       name="Conv2D")
-
-                out = tf.nn.bias_add(out, bias, name="BiasAdd")
-
-                out = xops.prelu(out, alpha, name="PReLU")
-
-                variables["Conv"] = {}
-                variables["Conv"]["Kernel"] = kern
-                variables["Conv"]["Bias"]   = bias
-                variables["Conv"]["Alpha"]  = alpha
-            # END scope Conv
-
-            with tf.variable_scope("Expansion"):
-                # Feature expansion operation
-                kern = tf.get_variable(name="Kernel", \
-                                       initializer= \
-                                       tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                       shape=expansion_shape, \
-                                       trainable=True)
-                variables["Expansion"] = {}
-                variables["Expansion"]["Kernel"] = kern
-                out = tf.nn.conv2d(out, kern, \
-                                   strides=[1,1,1,1], \
-                                   padding=padding, \
-                                   name="Conv2D")
-                # NOTE: no prelu here
-            #####################################
-
-            ########## Residual Branch ##########
-            if downsampling:
-                res_out = tf.nn.max_pool(inputs, \
-                                         ksize=[1,2,2,1], \
-                                         strides=[1,2,2,1], \
-                                         padding=padding, \
-                                         name="MaxPool")
-                # tf.tile() ?
-                res_out = tf.pad(res_out, \
-                                 paddings=zero_padding, \
-                                 name="ZeroPad")
-            else:
-                res_out = inputs
-            #####################################
-
-            out = tf.add(res_out, out, name="Residual")
-            # TODO: insert xops.PReLU here
-
-        # end with tf.variable_scope(name)
-        return out, variables
-    # END _block_bottleneck
-
-    def _block_bottleneck_downsample(self, inputs, filters, \
-                                     padding="SAME", \
-                                     separable_conv=False, \
-                                     bottleneck_factor=4, \
-                                     dilations=[1,1,1,1], \
-                                     name="BottleneckDownsample"):
-        variables = {}   # Dict with Variables in the block
-        out       = None
-        with tf.variable_scope(name):
-
-            with tf.name_scope("ShapeOps"):
-                # Get input channel count
-                input_ch = tf.shape(inputs, name="InputShape")[3]
-                # Number of filters in the bottleneck are reduced by a factor of
-                # @bottleneck_factor
-                bneck_filters = filters / bottleneck_factor
-                # Get conv. kernels
-                down_proj_shape = tf.stack([bneck_filters,2,2,input_ch], \
+                # @projection_rate
+                bneck_filters = input_ch / projection_rate
+                # Get conv. kernels' shape
+                proj_kern_shape = tf.stack([bneck_filters,1,1,input_ch], \
                                            name="DownProjectShape")
-                zero_paddings   = tf.stack([0,0,0,filters - input_ch])
-                if separable_conv:
-                    conv_shape = [tf.stack([bneck_filters,1,5,bneck_filters], \
-                                           name="ConvRowShape"), \
-                                  tf.stack([bneck_filters,5,1,bneck_filters], \
-                                           name="ConvColShape")]
-                else: #(default)
-                    conv_shape  = tf.stack([bneck_filters,3,3,bneck_filters], \
+                conv_kern_shape = tf.stack([bneck_filters,3,3,bneck_filters], \
                                            name="ConvShape")
-                expansion_shape = tf.stack([filters,1,1,bneck_filters], \
+                conv_out_shape  = tf.stack([input_shape[0], 2*input_shape[1], \
+                                            2*input_shape[2], bneck_filters], \
+                                           name="ConvTsposeOutShape")
+                # NOTE: upsampling halves the number of output channels following
+                #       VGG-philosophy of preserving computational complexity
+                exp_kern_shape = tf.stack([input_ch/2,1,1,bneck_filters], \
                                            name="ExpansionShape")
-                # END ShapeOps
+                # TODO: check if 1x1 of 3x3 is actually used
+                res_kern_shape = tf.stack([input_ch/2,1,1,input_ch], \
+                                          name="ResidualKernelShape")
+                # END scope ShapeOps
 
             ############ Main Branch ############
             with tf.variable_scope("DownProject"):
                 # Bottleneck projection operation
                 alpha = tf.get_variable(name="Alpha", \
-                                        initializer= \
-                                        tf.initializers.constant(0.25, \
-                                                                 dtype=tf.float32)
-                                        shape=bneck_filters, \
+                                        shape=[bneck_filters], \
+                                        dtype=tf.float32, \
+                                        initializer=alpha_initializer, \
                                         trainable=True)
                 kern = tf.get_variable(name="Kernel", \
-                                       initializer= \
-                                       tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                       shape=down_proj_shape, \
+                                       shape=proj_kern_shape, \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
                                        trainable=True)
+                out = tf.nn.conv2d(inputs, kern, \
+                                   strides=[1,1,1,1], \
+                                   padding=padding, \
+                                   name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                xops.prelu(out, alpha, name="PReLU")
+
                 variables["DownProject"] = {}
                 variables["DownProject"]["Kernel"] = kern
                 variables["DownProject"]["Alpha"] = alpha
-                out = tf.nn.conv2d(inputs, kern, \
-                                   strides=[1,2,2,1], \
-                                   padding=padding, \
-                                   name="Conv2D")
-                xops.prelu(out, alpha, name="PReLU")
+                variables["DownProject"]["BatchNorm"] = bn_params
+                # END scope DownProject
 
             with tf.variable_scope("Conv"):
                 # Main convolution operation
                 alpha = tf.get_variable(name="Alpha", \
-                                        initializer= \
-                                        tf.initializers.constant(0.25, \
-                                                                 dtype=tf.float32)
-                                        shape=bneck_filters, \
+                                        dtype=tf.float32, \
+                                        initializer=alpha_initializer, \
+                                        shape=[bneck_filters], \
                                         trainable=True)
-                bias  = tf.get_variable(name="BiasCol", \
-                                        initializer= \
-                                        tf.initializers.zeros(dtype=tf.float32), \
-                                        shape=bneck_filters, \
-                                        trainable=True) \
-                if separable_conv:
-                    kern = [ \
-                        tf.get_variable(name="KernelRow", \
-                                        initializer= \
-                                        tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                        shape=conv_shape[0], \
-                                        trainable=True), \
-                        tf.get_variable(name="KernelCol", \
-                                        initializer= \
-                                        tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                        shape=conv_shape[1], \
-                                        trainable=True) \
-                    ]
-                    bias = tf.get_variable(name="BiasCol", \
-                                           initializer= \
-                                           tf.initializers.zeros(dtype=tf.float32), \
-                                           shape=bneck_filters, \
-                                           trainable=True)
-                    # Separable convolution:
-                    out = tf.nn.conv2d(out, kern[0], \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       dilations=dilations, \
-                                       name="ConvRow")
-                    out = tf.nn.conv2d(out, kern[1], \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       dilations=dilations, \
-                                       name="ConvCol")
-
-                else: #(defalut)
-                    kern = tf.get_variable(name="Kernel", \
-                                           initializer= \
-                                           tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                           shape=conv_shape, \
-                                           trainable=True)
-                    out = tf.nn.conv2d(out, kern, \
-                                       strides=[1,1,1,1], \
-                                       padding=padding, \
-                                       dilations=dilations, \
-                                       name="Conv2D")
-
-                out = tf.nn.bias_add(out, bias, name="BiasAdd")
-
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=conv_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d_transpose(out, kern, conv_out_shape, \
+                                             strides=[1,2,2,1], \
+                                             name="Conv2DTranspose")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
                 out = xops.prelu(out, alpha, name="PReLU")
 
                 variables["Conv"] = {}
                 variables["Conv"]["Kernel"] = kern
-                variables["Conv"]["Bias"]   = bias
                 variables["Conv"]["Alpha"]  = alpha
+                variables["Conv"]["BatchNorm"] = bn_params
             # END scope Conv
 
+            # TODO: did they really use Expansion in upsampling blocks?
             with tf.variable_scope("Expansion"):
                 # Feature expansion operation
                 kern = tf.get_variable(name="Kernel", \
-                                       initializer= \
-                                       tf.initializers.glorot_uniform(dtype=tf.float32), \
-                                       shape=expansion_shape, \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=exp_kern_shape, \
                                        trainable=True)
-                variables["Expansion"] = {}
-                variables["Expansion"]["Kernel"] = kern
                 out = tf.nn.conv2d(out, kern, \
                                    strides=[1,1,1,1], \
                                    padding=padding, \
                                    name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                variables["Expansion"] = {}
+                variables["Expansion"]["Kernel"] = kern
+                variables["Expansion"]["BatchNorm"] = bn_params
                 # NOTE: no prelu here
+                # END scope Expansion
             #####################################
 
             ########## Residual Branch ##########
-            res_out = tf.nn.max_pool(inputs, \
-                                     ksize=[1,2,2,1], \
-                                     strides=[1,2,2,1], \
-                                     padding=padding, \
-                                     name="MaxPool")
+            #TODO: remove this and replace with upsampling stuff
+            res_out, max_pool_argmax = \
+                tf.nn.max_pool_with_argmax(inputs, \
+                                           ksize=[1,2,2,1], \
+                                           strides=[1,2,2,1], \
+                                           padding=padding, \
+                                           name="MaxPool")
             # tf.tile() ?
             res_out = tf.pad(res_out, \
                              paddings=zero_padding, \
                              name="ZeroPad")
             #####################################
 
-            out = tf.add(res_out, out, name="Residual")
-            # TODO: insert xops.PReLU here
+            alpha = tf.get_variable(name="Alpha", \
+                                    dtype=tf.float32, \
+                                    initializer=alpha_initializer, \
+                                    variables["Conv"]["BatchNorm"] = bn_params
+                                    shape=input_ch, \
+                                    trainable=True)
+            # NOTE: out comes from main branch
+            out = tf.add(inputs, out, name="Residual")
+            out = xops.prelu(out, alpha, name="PReLU")
+            variables["Alpha"] = alpha
 
         # end with tf.variable_scope(name)
-        return out, variables
+
+        return out, variables, max_pool_argmax
     # END _block_bottleneck
+        return out, variables
 
-        return out, variables, maxPoolIdx
-
-    def _block_bottleneck_upsample(self, inputs, filters, \
-                                   padding="SAME", \
-                                   separable_conv=False, \
-                                   bottleneck_factor=4, \
-                                   dilations=[1,1,1,1], \
-                                   name="BottleneckUpsample"):
+    def _block_bottleneck_asymmetric(self, inputs, \
+                                     receptive_field=[5,5], \
+                                     padding="SAME", \
+                                     projection_rate=4, \
+                                     name="BottleneckAsymmetric"):
 
         return out, variables
+
+
+
+
+
+
+    def _block_bottleneck_downsample(self, inputs, \
+                                     padding="SAME", \
+                                     projection_rate=4, \
+                                     is_training=True, \
+                                     bn_momentum=0.90, \
+                                     kernel_initializer=tf.initializers.glorot_uniform(), \
+                                     alpha_initializer=tf.initializers.constant(0.25), \
+                                     name="BottleneckDownsample"):
+        """
+                     +-------+
+                     | Input |
+                     +-------+
+                         ||
+            +------------++----------+
+            |                        |
+            |           +-------------------------+
+            |           |       2x2/s2 conv       |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            |           +-------------------------+
+            |                        | Projection
+            |                        V
+            |           +-------------------------+
+            |           |         3x3 conv        |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            |           +-------------------------+
+            |                        | Convolution
+            |                        V
+            |           +-------------------------+
+            |           |        1x1 conv         |
+            |           |      x(2*input_ch)      |
+            |           |     -> BatchNorm        |
+            |           +-------------------------+
+            |                        | Expansion
+            +------------++----------+
+                         \/ Residual connection
+                   +-----------+
+                   |    Add    |
+                   | -> PReLU  |
+                   +-----------+
+        :param inputs: 
+        :param padding: 
+        :param projection_rate: 
+        :param name: 
+        :returns: 
+        :rtype: 
+
+        """
+
+        #NOTE: need to return max-pool argmax
+        variables = {}   # Dict with Variables in the block
+        out       = None
+        with tf.variable_scope(name):
+
+            with tf.name_scope("ShapeOps"):
+                # Get input channel count
+                input_ch = tf.shape(inputs, name="InputShape")[3]
+                # Number of filters in the bottleneck are reduced by a factor of
+                # @projection_rate
+                bneck_filters = input_ch / projection_rate
+                # Get conv. kernels' shape
+                proj_kern_shape = tf.stack([bneck_filters,2,2,input_ch], \
+                                           name="DownProjectShape")
+                conv_kern_shape  = tf.stack([bneck_filters,3,3,bneck_filters], \
+                                       name="ConvShape")
+                # NOTE: downsampling doubles the output channel count following
+                #       VGG-philosophy of preserving computational complexity
+                exp_kern_shape = tf.stack([2*input_ch,1,1,bneck_filters], \
+                                           name="ExpansionShape")
+                zero_paddings   = tf.stack([0,0,0,input_ch])
+                # END scope ShapeOps
+
+            ############ Main Branch ############
+            with tf.variable_scope("DownProject"):
+                # Bottleneck projection operation
+                alpha = tf.get_variable(name="Alpha", \
+                                        dtype=tf.float32, \
+                                        initializer=alpha_initializer, \
+                                        shape=[bneck_filters], \
+                                        trainable=True)
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=proj_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d(inputs, kern, \
+                                   strides=[1,2,2,1], \
+                                   padding=padding, \
+                                   name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                xops.prelu(out, alpha, name="PReLU")
+
+                variables["DownProject"] = {}
+                variables["DownProject"]["Kernel"] = kern
+                variables["DownProject"]["Alpha"] = alpha
+                variables["DownProject"]["BatchNorm"] = bn_params
+                # END scope DownProject
+
+            with tf.variable_scope("Conv"):
+                # Main convolution operation
+                alpha = tf.get_variable(name="Alpha", \
+                                        dtype=tf.float32, \
+                                        initializer=alpha_initializer, \
+                                        shape=[bneck_filters], \
+                                        trainable=True)
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=conv_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d(out, kern, \
+                                   strides=[1,1,1,1], \
+                                   padding=padding, \
+                                   dilations=dilations, \
+                                   name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                out = xops.prelu(out, alpha, name="PReLU")
+
+                variables["Conv"] = {}
+                variables["Conv"]["Kernel"] = kern
+                variables["Conv"]["Alpha"]  = alpha
+                variables["Conv"]["BatchNorm"] = bn_params
+            # END scope Conv
+
+            with tf.variable_scope("Expansion"):
+                # Feature expansion operation
+                kern = tf.get_variable(name="Kernel", \
+                                       dtype=tf.float32, \
+                                       initializer=kernel_initializer, \
+                                       shape=exp_kern_shape, \
+                                       trainable=True)
+                out = tf.nn.conv2d(out, kern, \
+                                   strides=[1,1,1,1], \
+                                   padding=padding, \
+                                   name="Conv2D")
+                out, bn_params = self._batch_normalization(out, is_training, \
+                                                           momentum=bn_momentum)
+                variables["Expansion"] = {}
+                variables["Expansion"]["Kernel"] = kern
+                variables["Expansion"]["BatchNorm"] = bn_params
+                # NOTE: no prelu here
+                # END scope Expansion
+            #####################################
+
+            ########## Residual Branch ##########
+            # MAYBE: add Targmax=tf.int32 below? (can still address 4GB)
+            res_out, max_pool_argmax = \
+                tf.nn.max_pool_with_argmax(inputs, \
+                                           ksize=[1,2,2,1], \
+                                           strides=[1,2,2,1], \
+                                           padding=padding, \
+                                           name="MaxPool")
+            # tf.tile() ?
+            res_out = tf.pad(res_out, \
+                             paddings=zero_padding, \
+                             name="ZeroPad")
+            #####################################
+
+            alpha = tf.get_variable(name="Alpha", \
+                                    dtype=tf.float32, \
+                                    initializer=alpha_initializer, \
+                                    variables["Conv"]["BatchNorm"] = bn_params
+                                    shape=input_ch, \
+                                    trainable=True)
+            # NOTE: out comes from main branch
+            out = tf.add(inputs, out, name="Residual")
+            out = xops.prelu(out, alpha, name="PReLU")
+            variables["Alpha"] = alpha
+
+        # end with tf.variable_scope(name)
+
+        return out, variables, max_pool_argmax
+    # END _block_bottleneck
 
     def _build(self):
 

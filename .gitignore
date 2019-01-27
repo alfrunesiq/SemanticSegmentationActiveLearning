@@ -1,0 +1,36 @@
+# Python
+**/__pycache__
+
+# Compiled objects
+*.so
+
+# Latex
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fls
+*latexmk*
+*.log
+*.out
+*.pdf
+*.run.xml
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+**/auto
+
+# Tensorflow parameters
+*model-*
+*.pbtxt
+*.pb
+*.event*
+
+# C-C++ // CMake
+**/build
+**/.clang_complete
+
+# misc
+*.bak
+*.avi
