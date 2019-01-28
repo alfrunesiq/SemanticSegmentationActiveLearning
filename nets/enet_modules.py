@@ -4,8 +4,9 @@ import extra_ops as xops
 def block_initial(inputs, is_training, \
                   padding="SAME", \
                   output_width=16, \
-                  name="initial"):
-    """FIXME! briefly describe function
+                  name="Initial"):
+    """
+    ENet initial block:
                  +-------+
                  | Input |
                  +-------+
@@ -24,11 +25,11 @@ def block_initial(inputs, is_training, \
 
     :param inputs:       Input tensor
     :param padding:      Padding for the conv operation
-    :param output_width: Channels of the output tensor
+    :param output_width: Number of channels for the output tensor
     :param name:         Name of the scope for the block
 
     :returns: output tensor, trainable variables
-    :rtype:   Tensor, list
+    :rtype:   (tf.Tensor, dict)
     """
     params = {}
     with tf.variable_scope(name):
@@ -60,10 +61,10 @@ def block_initial(inputs, is_training, \
     return out, params
 
 def block_bottleneck(inputs, \
+                      is_training, \
                       padding="SAME", \
                       projection_rate=4, \
                       dilations=[1,1,1,1], \
-                      is_training=True, \
                       bn_decay=0.90, \
                       asymmetric=False, \
                       kernel_initializer=tf.initializers.glorot_uniform(), \
@@ -105,14 +106,20 @@ def block_bottleneck(inputs, \
                | -> PReLU  |
                +-----------+
 
-    :param inputs:
-    :param padding:
-    :param projection_rate:
-    :param dilations:
-    :param name:
-    :returns:
-    :rtype:
-
+    :param inputs:          Input tensor.
+    :param is_training:     Whether to accumulate statistics in batch norm and
+                            apply spatial dropout TODO: determine where to put DO.
+    :param padding:         Padding for the main convolution.
+    :param projection_rate: Bottleneck operates on @projection_rate less channels.
+    :param dilations:       Dilationrates in the main convolution block.
+    :param bn_decay:        Decay rate for exp. running mean in batch norm.
+    :param asymmetric:      Use asymmetric (spatially separable) conv.
+    :param kernel_initializer: tf.initializer for the conv kernels.
+    :param alpha_initializer:  tf.initializer for the PReLU parameters.
+    :param name:            Name of the block scope.
+    :returns: Output tensor, Parameters
+              NOTE: Parameters are stored in a dictionary indexed by the scopes.
+    :rtype:   (tf.Tensor, dict)
     """
     variables = {}   # Dict with Variables in the block
     out       = None
@@ -123,7 +130,7 @@ def block_bottleneck(inputs, \
             input_ch = inputs.shape[-1]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
-            bneck_filters = input_ch / projection_rate
+            bneck_filters = input_ch // projection_rate
             # Get conv. kernels' shape
             proj_kern_shape = [1,1,input_ch,bneck_filters]
             if asymmetric:
@@ -155,7 +162,7 @@ def block_bottleneck(inputs, \
                                name="Conv2D")
             out, bn_params = xops.batch_normalization(out, is_training, \
                                                       decay=bn_decay)
-            xops.prelu(out, alpha, name="PReLU")
+            out = xops.prelu(out, alpha, name="PReLU")
             variables["DownProject"] = {}
             variables["DownProject"]["Kernel"] = kern
             variables["DownProject"]["Alpha"] = alpha
@@ -243,8 +250,7 @@ def block_bottleneck(inputs, \
         out = tf.add(inputs, out, name="Residual")
         out = xops.prelu(out, alpha, name="PReLU")
         variables["Alpha"] = alpha
-
-        # end tf.variable_scope(name)
+        # END scope @name
 
     return out, variables
 # END def block_bottleneck
@@ -259,47 +265,53 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
                               alpha_initializer=tf.initializers.constant(0.25), \
                               name="BottleneckUpsample"):
     """
-                 +-------+
-                 | Input |
-                 +-------+
-                     ||
-        +------------++----------+
-        |                        |
-        |           +-------------------------+
-        |           |       2x2/s2 conv       |
-        |           |  x(input_ch/proj_rate)  |
-        |           |  -> BatchNorm -> PReLU  |
-        V           +-------------------------+
-+----------------+               | Projection
-|    1x1 conv    |               V
-| x(input_ch/2)  |  +-------------------------+
-+----------------+  |         3x3 conv        |
-        |           |  x(input_ch/proj_rate)  |
-        V           |  -> BatchNorm -> PReLU  |
-+----------------+  +-------------------------+
-| 2x2 max_unpool |               | Convolution
-+----------------+               V
-        |           +-------------------------+
-        |           |        1x1 conv         |
-        |           |      x(input_ch/2)      |
-        |           |     -> BatchNorm        |
-        |           +-------------------------+
-        |                        | Expansion
-        +------------++----------+
-                     \/ Residual connection
-               +-----------+
-               |    Add    |
-               | -> PReLU  |
-               +-----------+
-    :param inputs:
-    :param padding:
-    :param projection_rate:
-    :param name:
-    :returns:
-    :rtype:
-
+                     +-------+
+                     | Input |
+                     +-------+
+                         ||
+            +------------++----------+
+            |                        |
+            |           +-------------------------+
+            |           |       2x2/s2 conv       |
+            |           |  x(input_ch/proj_rate)  |
+            |           |  -> BatchNorm -> PReLU  |
+            V           +-------------------------+
+    +----------------+               | Projection
+    |    1x1 conv    |               V
+    | x(input_ch/2)  |  +-------------------------+
+    +----------------+  |         3x3 conv        |
+            |           |  x(input_ch/proj_rate)  |
+            V           |  -> BatchNorm -> PReLU  |
+    +----------------+  +-------------------------+
+    | 2x2 max_unpool |               | Convolution
+    +----------------+               V
+            |           +-------------------------+
+            |           |        1x1 conv         |
+            |           |      x(input_ch/2)      |
+            |           |     -> BatchNorm        |
+            |           +-------------------------+
+            |                        | Expansion
+            +------------++----------+
+                         \/ Residual connection
+                   +-----------+
+                   |    Add    |
+                   | -> PReLU  |
+                   +-----------+
+    :param inputs:          Input tensor.
+    :param unpool_argmax:   Switches for the unpool op from the corresponding
+                            downsampling max_pool op in the encoder stage.
+    :param is_training:     Whether to accumulate statistics in batch norm.
+    :param padding:         Padding for the main convolution.
+    :param projection_rate: Bottleneck operates on @projection_rate less channels.
+    :param dilations:       Dilationrates in the main convolution block.
+    :param bn_decay:        Decay rate for exp. running mean in batch norm.
+    :param kernel_initializer: tf.initializer for the conv kernels.
+    :param alpha_initializer:  tf.initializer for the PReLU parameters.
+    :param name:            Name of the block scope.
+    :returns: Output tensor, Parameters
+              NOTE: Parameters are stored in a dictionary indexed by the scopes.
+    :rtype:   (tf.Tensor, dict)
     """
-
     variables = {}   # Dict with Variables in the block
     out       = None
     with tf.variable_scope(name):
@@ -311,7 +323,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
             batch_sz    = input_shape[0]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
-            bneck_filters = input_ch / projection_rate
+            bneck_filters = input_ch // projection_rate
             # Get conv. kernels' shape
             proj_kern_shape = [1,1,input_ch,bneck_filters]
             conv_kern_shape = [3,3,bneck_filters,bneck_filters]
@@ -320,9 +332,9 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
                                        name="ConvTsposeOutShape")
             # NOTE: upsampling halves the number of output channels following
             #       VGG-philosophy of preserving computational complexity
-            exp_kern_shape = [1,1,bneck_filters,input_ch/2]
+            exp_kern_shape = [1,1,bneck_filters,input_ch//2]
             # TODO: check if 1x1 of 3x3 is actually used
-            res_kern_shape = [1,1,input_ch,input_ch/2]
+            res_kern_shape = [1,1,input_ch,input_ch//2]
             # END scope ShapeOps
 
         ############ Main Branch ############
@@ -344,7 +356,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
                                name="Conv2D")
             out, bn_params = xops.batch_normalization(out, is_training, \
                                                        decay=bn_decay)
-            xops.prelu(out, alpha, name="PReLU")
+            out = xops.prelu(out, alpha, name="PReLU")
 
             variables["DownProject"] = {}
             variables["DownProject"]["Kernel"] = kern
@@ -377,7 +389,6 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
             variables["Conv"]["BatchNorm"] = bn_params
         # END scope Conv
 
-        # TODO: did they really use Expansion in upsampling blocks?
         with tf.variable_scope("Expansion"):
             # Feature expansion operation
             kern = tf.get_variable(name="Kernel", \
@@ -391,15 +402,14 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
                                name="Conv2D")
             out, bn_params = xops.batch_normalization(out, is_training, \
                                                        decay=bn_decay)
+            # NOTE: no prelu here
             variables["Expansion"] = {}
             variables["Expansion"]["Kernel"] = kern
             variables["Expansion"]["BatchNorm"] = bn_params
-            # NOTE: no prelu here
             # END scope Expansion
         #####################################
 
         ########## Residual Branch ##########
-        #TODO: remove this and replace with upsampling stuff
         kern = tf.get_variable(name="Kernel", \
                                dtype=tf.float32, \
                                initializer=kernel_initializer, \
@@ -415,7 +425,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
         #####################################
 
         alpha = tf.get_variable(name="Alpha", \
-                                shape=[input_ch/2], \
+                                shape=[input_ch//2], \
                                 dtype=tf.float32, \
                                 initializer=alpha_initializer, \
                                 trainable=True)
@@ -470,10 +480,16 @@ def block_bottleneck_downsample(inputs, is_training, \
                    |    Add    |
                    | -> PReLU  |
                    +-----------+
-    :param inputs:
-    :param padding:
-    :param projection_rate:
-    :param name:
+    :param inputs:          Input tensor.
+    :param is_training:     Whether to accumulate statistics in batch norm and
+                            apply spatial dropout TODO: determine where to put DO.
+    :param padding:         Padding for the main convolution.
+    :param projection_rate: Bottleneck operates on @projection_rate less channels.
+    :param dilations:       Dilationrates in the main convolution block.
+    :param bn_decay:        Decay rate for exp. running mean in batch norm.
+    :param kernel_initializer: tf.initializer for the conv kernels.
+    :param alpha_initializer:  tf.initializer for the PReLU parameters.
+    :param name:            Name of the block scope.
     :returns: operation output, parameters, max pool argmax
     :rtype:   (tf.Tensor, dict, tf.Tensor)
     """
@@ -485,7 +501,7 @@ def block_bottleneck_downsample(inputs, is_training, \
             input_ch = inputs.shape[-1]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
-            bneck_filters = input_ch / projection_rate
+            bneck_filters = input_ch // projection_rate
             # Get conv. kernels' shape
             proj_kern_shape = [2,2,input_ch,bneck_filters]
             conv_kern_shape = [3,3,bneck_filters,bneck_filters]
@@ -514,7 +530,7 @@ def block_bottleneck_downsample(inputs, is_training, \
                                name="Conv2D")
             out, bn_params = xops.batch_normalization(out, is_training, \
                                                        decay=bn_decay)
-            xops.prelu(out, alpha, name="PReLU")
+            out = xops.prelu(out, alpha, name="PReLU")
 
             variables["DownProject"] = {}
             variables["DownProject"]["Kernel"] = kern
@@ -591,12 +607,35 @@ def block_bottleneck_downsample(inputs, is_training, \
                                 dtype=tf.float32, \
                                 initializer=alpha_initializer, \
                                 trainable=True)
-        print(alpha)
         # NOTE: out comes from main branch
         out = tf.add(res_out, out, name="Residual")
         out = xops.prelu(out, alpha, name="PReLU")
         variables["Alpha"] = alpha
-    # end with tf.variable_scope(name)
+    # END scope @name
 
     return out, variables, max_pool_argmax
 # END def block_bottleneck
+
+def block_final(inputs, num_classes, \
+                kernel_initializer=tf.initializers.glorot_uniform(), \
+                name="Final"):
+    variables = {}
+    with tf.variable_scope(name):
+        with tf.name_scope("ShapeOps"):
+            input_shape = tf.shape(inputs, name="InputShape")
+            out_shape   = tf.stack([input_shape[0],2*input_shape[1], \
+                                    2*input_shape[1],num_classes])
+            kern_shape  = [3,3,num_classes,inputs.shape[-1]]
+
+        kern = tf.get_variable(name="Kernel", \
+                               dtype=tf.float32, \
+                               initializer=kernel_initializer, \
+                               shape=kern_shape, \
+                               trainable=True)
+        out = tf.nn.conv2d_transpose(inputs, kern, out_shape, \
+                                     strides=[1,2,2,1], \
+                                     name="Conv2DTranspose")
+        variables["Kernel"] = kern
+
+    #END scope @name
+    return out, variables
