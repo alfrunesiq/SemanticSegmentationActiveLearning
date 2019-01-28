@@ -11,7 +11,8 @@ def test_unpool2d(sess):
     inputs = tf.placeholder(shape=[None, 512, 512, 3], dtype=tf.float32)
 
     mp, am = tf.nn.max_pool_with_argmax(inputs, ksize=[1,2,2,1], \
-                                        strides=[1,2,2,1], padding="SAME")
+                                        strides=[1,2,2,1],\
+                                        padding="SAME")
     up = xops.unpool_2d(mp, am)
     mpupmp = tf.nn.max_pool(up, ksize=[1,2,2,1], \
                             strides=[1,2,2,1], padding="SAME")
