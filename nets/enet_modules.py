@@ -61,15 +61,16 @@ def block_initial(inputs, is_training, \
     return out, params
 
 def block_bottleneck(inputs, \
-                      is_training, \
-                      padding="SAME", \
-                      projection_rate=4, \
-                      dilations=[1,1,1,1], \
-                      bn_decay=0.90, \
-                      asymmetric=False, \
-                      kernel_initializer=tf.initializers.glorot_uniform(), \
-                      alpha_initializer=tf.initializers.constant(0.25), \
-                      name="Bottleneck"):
+                     is_training, \
+                     padding="SAME", \
+                     projection_rate=4, \
+                     dilations=[1,1,1,1], \
+                     bn_decay=0.90, \
+                     asymmetric=False, \
+                     kernel_initializer=tf.initializers.glorot_uniform(), \
+                     alpha_initializer=tf.initializers.constant(0.25), \
+                     drop_rate=0.1, \
+                     name="Bottleneck"):
     """
     Implements the plain bottleneck module in ENet, including possibility
     of dilated convolution and asymmetric (spatially separable) convolution.
@@ -116,6 +117,7 @@ def block_bottleneck(inputs, \
     :param asymmetric:      Use asymmetric (spatially separable) conv.
     :param kernel_initializer: tf.initializer for the conv kernels.
     :param alpha_initializer:  tf.initializer for the PReLU parameters.
+    :param drop_rate:       Dropout probability (is_training=True)
     :param name:            Name of the block scope.
     :returns: Output tensor, Parameters
               NOTE: Parameters are stored in a dictionary indexed by the scopes.
@@ -234,6 +236,8 @@ def block_bottleneck(inputs, \
                                name="Conv2D")
             out, bn_params = xops.batch_normalization(out, is_training, \
                                                        decay=bn_decay)
+            if is_training and drop_rate > 0.0:
+                out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
             variables["Expansion"] = {}
             variables["Expansion"]["Kernel"] = kern
             variables["Expansion"]["BatchNorm"] = bn_params
@@ -263,6 +267,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
                               bn_decay=0.90, \
                               kernel_initializer=tf.initializers.glorot_uniform(), \
                               alpha_initializer=tf.initializers.constant(0.25), \
+                              drop_rate=0.1, \
                               name="BottleneckUpsample"):
     """
                      +-------+
@@ -307,6 +312,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
     :param bn_decay:        Decay rate for exp. running mean in batch norm.
     :param kernel_initializer: tf.initializer for the conv kernels.
     :param alpha_initializer:  tf.initializer for the PReLU parameters.
+    :param drop_rate:       Dropout probability (is_training==True)
     :param name:            Name of the block scope.
     :returns: Output tensor, Parameters
               NOTE: Parameters are stored in a dictionary indexed by the scopes.
@@ -402,6 +408,8 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
                                name="Conv2D")
             out, bn_params = xops.batch_normalization(out, is_training, \
                                                        decay=bn_decay)
+            if is_training and drop_rate > 0.0:
+                out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
             # NOTE: no prelu here
             variables["Expansion"] = {}
             variables["Expansion"]["Kernel"] = kern
@@ -446,6 +454,7 @@ def block_bottleneck_downsample(inputs, is_training, \
                                 dilations=[1,1,1,1], \
                                 kernel_initializer=tf.initializers.glorot_uniform(), \
                                 alpha_initializer=tf.initializers.constant(0.25), \
+                                drop_rate=0.1, \
                                 name="BottleneckDownsample"):
     """
                      +-------+
@@ -482,7 +491,7 @@ def block_bottleneck_downsample(inputs, is_training, \
                    +-----------+
     :param inputs:          Input tensor.
     :param is_training:     Whether to accumulate statistics in batch norm and
-                            apply spatial dropout TODO: determine where to put DO.
+                            apply spatial dropout
     :param padding:         Padding for the main convolution.
     :param projection_rate: Bottleneck operates on @projection_rate less channels.
     :param dilations:       Dilationrates in the main convolution block.
@@ -490,6 +499,7 @@ def block_bottleneck_downsample(inputs, is_training, \
     :param kernel_initializer: tf.initializer for the conv kernels.
     :param alpha_initializer:  tf.initializer for the PReLU parameters.
     :param name:            Name of the block scope.
+    :param drop_rate:       Dropout probability (is_training==True)
     :returns: operation output, parameters, max pool argmax
     :rtype:   (tf.Tensor, dict, tf.Tensor)
     """
@@ -582,6 +592,8 @@ def block_bottleneck_downsample(inputs, is_training, \
             variables["Expansion"]["Kernel"] = kern
             variables["Expansion"]["BatchNorm"] = bn_params
             # NOTE: no prelu here
+            if is_training and drop_rate > 0.0:
+                out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
             # END scope Expansion
         #####################################
 

@@ -115,6 +115,12 @@ def batch_normalization(inputs, is_training=True, decay=0.9):
                                                mean=params["Mean"], \
                                                variance=params["Variance"], \
                                                is_training=is_training)
-
-
     return out, params
+
+def spatial_dropout(inputs, drop_rate, name="SpatialDropout"):
+    keep_prob = 1-drop_rate
+    with tf.name_scope(name):
+        input_shape = tf.shape(inputs, name="InputShape")
+        noise_shape = tf.stack([input_shape[0], 1, 1, input_shape[-1]])
+        out = tf.nn.dropout(inputs, keep_prob, noise_shape, name="Dropout")
+    return out
