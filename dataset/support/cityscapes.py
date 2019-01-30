@@ -109,7 +109,7 @@ labels = [
 #-------------------------------------------------------------------------------
 id2trainId = [label.trainId for label in labels]
 
-id2trainId_tf = tf.constant(id2trainId, dtype=tf.int32)
+id2trainId_tf = tf.constant(id2trainId, dtype=tf.uint8)
 #-------------------------------------------------------------------------------
 # Support functions - ID mappings and file association list
 #-------------------------------------------------------------------------------
@@ -124,7 +124,8 @@ def label_mapping(label_image):
     :returns: The converted image as a tensorflow tensor.
     :rtype:   tf.Tensor
     """
-    return tf.nn.embedding_lookup(id2trainId_tf, label_image)
+    labels_int32 = tf.to_int32(label_image)
+    return tf.nn.embedding_lookup(id2trainId_tf, labels_int32)
 
 def file_associations(root_path, coarse=False):
     """
@@ -136,8 +137,11 @@ def file_associations(root_path, coarse=False):
     :returns: dictionary of file associations for each split
     :rtype:   dict{str: list(tuple(str,str))}
     """
+    # The dataset is organized using following filename paths
+    #{root}/{type}{video}/{split}/{city}/{city}_{seq:0>6}_{frame:0>6}_{type}{ext}
     label_type = "gtCoarse" if coarse else "gtFine"
-    image_path_base = os.path.join(root_path, "leftImg8bit")
+    image_type = "leftImg8bit"
+    image_path_base = os.path.join(root_path, image_type)
     label_path_base = os.path.join(root_path, label_type)
     filepairs = {
         "train": [], \
@@ -147,10 +151,9 @@ def file_associations(root_path, coarse=False):
     if coarse:
         filepairs["train_extra"] = []
 
-    #{root}/{type}{video}/{split}/{city}/{city}_{seq:0>6}_{frame:0>6}_{type}{ext}
     for split in filepairs.keys():
         # Update path to {split} scope
-        image_path_split = os.path.join(label_path_base, split)
+        image_path_split = os.path.join(image_path_base, split)
         label_path_split = os.path.join(label_path_base, split)
         for city in os.listdir(label_path_split):
             # Update path to {city} scope
@@ -159,13 +162,13 @@ def file_associations(root_path, coarse=False):
             for filename in os.listdir(label_path_city):
                 file_id = filename.split("_")
                 # file_id = [city, seq, frame, type, ext]
-                # TODO check out if the filename assumptions are correct
+                # filter out instance seg. labels and polygon description files
                 if file_id[-1] != "labelIds.png":
                     continue
                 # Construct the corresponding raw image filename
-                image_id = file_id[:3]
-                image_id.append("leftImg8bit.png")
-                imagename = "_".join(img_id)
+                image_id = file_id[:-1]
+                image_id[-1] = (image_type + ".png")
+                imagename = "_".join(image_id)
                 # Construct filepair
                 filepair = (os.path.join(image_path_city, imagename), \
                             os.path.join(label_path_city, filename))
