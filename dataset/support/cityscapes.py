@@ -143,15 +143,16 @@ def file_associations(root_path, coarse=False):
     image_type = "leftImg8bit"
     image_path_base = os.path.join(root_path, image_type)
     label_path_base = os.path.join(root_path, label_type)
-    filepairs = {
-        "train": [], \
-        "val": [], \
-        "test": []
+    _file_associations = {
+        "train": {},
+        "val":   {},
+        "test":  {}
     }
     if coarse:
-        filepairs["train_extra"] = []
+        _file_associations["train_extra"] = {}
 
-    for split in filepairs.keys():
+    # Iterate over file tree and associate image and label paths
+    for split in _file_associations.keys():
         # Update path to {split} scope
         image_path_split = os.path.join(image_path_base, split)
         label_path_split = os.path.join(label_path_base, split)
@@ -159,19 +160,22 @@ def file_associations(root_path, coarse=False):
             # Update path to {city} scope
             image_path_city = os.path.join(image_path_split, city)
             label_path_city = os.path.join(label_path_split, city)
+            # TODO this could be vectorized
             for filename in os.listdir(label_path_city):
-                file_id = filename.split("_")
+                label_id = filename.split("_")
                 # file_id = [city, seq, frame, type, ext]
                 # filter out instance seg. labels and polygon description files
-                if file_id[-1] != "labelIds.png":
+                if label_id[-1] != "labelIds.png":
                     continue
+                file_id = "_".join(label_id[:-1])
                 # Construct the corresponding raw image filename
-                image_id = file_id[:-1]
+                image_id = label_id[:-1]
                 image_id[-1] = (image_type + ".png")
-                imagename = "_".join(image_id)
-                # Construct filepair
-                filepair = (os.path.join(image_path_city, imagename), \
-                            os.path.join(label_path_city, filename))
-                # Add pair to global dictionary
-                filepairs[split].append(filepair)
-    return filepairs
+                image_name = "_".join(image_id)
+                # Construct file association entry
+                image_path = os.path.join(image_path_city, image_name)
+                label_path = os.path.join(label_path_city, filename)
+                _file_associations[split][file_id] = {}
+                _file_associations[split][file_id]["image"] = image_path
+                _file_associations[split][file_id]["label"] = label_path
+    return _file_associations
