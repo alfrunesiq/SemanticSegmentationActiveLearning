@@ -9,6 +9,7 @@ import sys
 
 import argparse
 
+import numpy as np
 import tensorflow as tf
 
 show_progress = False
@@ -17,10 +18,15 @@ try:
     show_progress = True
 except ImportError:
     pass
+try:
+    import cv2
+except ImportError:
+    pass
 
 def _bytes_feature(value):
   """Returns a bytes_list from a string / byte."""
-  return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+  _bytes = value if not isinstance(value, str) else value.encode()
+  return tf.train.Feature(bytes_list=tf.train.BytesList(value=[_bytes]))
 
 def _int64_feature(value):
   """Returns an int64_list from a bool / enum / int / uint."""
@@ -28,9 +34,9 @@ def _int64_feature(value):
 
 def main(args):
     if args.dataset[0].lower() == "cityscapes":
-        import support.cityscapes as support
+        from support.cityscapes import file_associations, label_mapping
     elif args.dataset[0].lower() == "freiburg":
-        import support.freiburg as support
+        from support.freiburg import file_associations, label_mapping
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
@@ -41,15 +47,18 @@ def main(args):
     jpg_decoding = tf.image.decode_jpeg(file_contents)
     png_decoding = tf.image.decode_png(file_contents)
     # Remapping of labels (can only be png)
-    labels_mapped   = support.label_mapping(png_decoding)
+    labels_mapped   = label_mapping(png_decoding)
     labels_encoding = tf.image.encode_png(labels_mapped)
     # Get the shape of image / labels to assert them equal
     png_image_shape = tf.shape(png_decoding)
     jpg_image_shape = tf.shape(jpg_decoding)
+    # In order to convert tiff to png
+    input_image = tf.placeholder(tf.uint8, shape=[None,None,None])
+    png_encoding = tf.image.encode_png(input_image)
     ##########################################################
 
     if os.path.exists(args.data_dir[0]):
-        dataset_paths = support.file_associations(args.data_dir[0])
+        dataset_paths = file_associations(args.data_dir[0])
 
     if not os.path.exists(args.output_dir[0]):
         sys.stdout.write("Directory \"%s\" does not exist. " % args.output_dir[0])
@@ -94,7 +103,7 @@ def main(args):
                         feed_dict={input_filename: path})
                     features["label"] = _bytes_feature(label)
                 else: # image data
-                    # Check file extension
+                    # Handle the different file extensions separately
                     if ext == "png":
                         image, shape = sess.run(
                             fetches=[file_contents, png_image_shape],
@@ -104,7 +113,20 @@ def main(args):
                         image, shape = sess.run(
                             fetches=[file_contents, jpg_image_shape],
                             feed_dict={input_filename: path})
-                    else: # TODO add support for tiff by wrapping in tf.py_func
+                    elif ext == "tif" or ext == "tiff":
+                        # read image and convert to png
+                        ext = "png"
+                        # Read image as is (iscolor=-1)
+                        image = cv2.imread(path, -1)
+                        shape = image.shape
+                        if len(shape) == 3 and shape[-1] == 3:
+                            # Opencv defaults to BGR whereas Tensorflow RGB
+                            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                        elif len(shape) == 2:
+                            image = np.expand_dims(image, axis=-1)
+                        image = sess.run(png_encoding,
+                                         feed_dict={input_image: image})
+                    else:
                         raise ValueError(
                             "Unsupported image format \"%s\"" % ext)
                     if len(shape) == 3:
@@ -134,6 +156,29 @@ def main(args):
             filename = example[0] + ".tfrecord"
             with tf.gfile.Open(os.path.join(split_path, filename), 'wb') as f:
                 f.write(tf_example.SerializeToString())
+    # Write feature keys in order to dynamically being able to reconstruct the
+    # content of the records when reading the records.
+    meta_file = os.path.join(args.output_dir[0], "meta.txt")
+    with open(meta_file, "w") as f:
+        f.write("\n".join(features.keys()))
+    # In order to reconstruct:
+    # features = {}
+    # with open(meta_file, "r") as f:
+    #   ln = f.readline()
+    #   if ln.endswith("/data") or \
+    #      ln.endswith("/encoding") or \
+    #      ln == "label":
+    #      features[ln] = tf.FixedLenFeature([], tf.string)
+    #   else:
+    #      features[ln] = tf.FixedLenFeature([], tf.int64)
+    #
+    # .../channels -> tf.FixedLenFeature([], tf.int64),
+    # .../data     -> tf.FixedLenFeature([], tf.string),
+    # .../encoding -> tf.FixedLenFeature([], tf.string),
+    # label        -> tf.FixedLenFeature([], tf.string),
+    # height       -> tf.FixedLenFeature([], tf.int64),
+    # width        -> tf.FixedLenFeature([], tf.int64),
+
 
 if __name__ == "__main__":
     # Setup commandline arguments
@@ -156,5 +201,13 @@ if __name__ == "__main__":
                         dest="output_dir", \
                         required=True, \
                         help="Path to where to store the records.")
+    parser.add_argument(
+        "-e", "--extra", type=str, nargs="*",
+        dest="extra", required=False,
+        help="Extra arguments. This is dependent on the particular dataset "
+        "selected with the \"-t\" flag.\n"
+        "%-10s : {gtCoarse} - coarsely annotated dataset.\n"
+        "%-10s : {nir,nir_gray,depth_gray,(etc)} - additional modalities."
+        % ("cityscapes", "freiburg"))
     args = parser.parse_args()
     main(args)

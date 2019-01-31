@@ -49,7 +49,7 @@ def file_associations(root_path):
     #TODO add docstring
     image_dir = "rgb"
     label_dir = "GT_color"
-    nir_dir   = "nir"
+    nir_dir   = "nir_gray"
 
     _file_associations = {
         "train": {},
