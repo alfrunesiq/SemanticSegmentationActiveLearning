@@ -130,6 +130,8 @@ class SupportLayer:
         """
         labels_int32 = tf.to_int32(label_image)
         return tf.nn.embedding_lookup(id2trainId_tf, labels_int32)
+    def get_label_mapping(self):
+        return np.array(id2trainId)
 
     def file_associations(self, root_path):
         """

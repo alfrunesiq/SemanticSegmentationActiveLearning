@@ -48,6 +48,9 @@ class SupportLayer:
         green_int32 = tf.to_int32(green)
         return tf.nn.embedding_lookup(tf_green2trainId, green_int32)
 
+    def get_label_mapping(self):
+        return green2trainId
+
     def file_associations(self, root_path):
         #TODO add docstring
         image_dir = "rgb"

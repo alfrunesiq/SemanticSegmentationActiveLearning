@@ -95,6 +95,7 @@ def main(args):
         else:
             example_iter = list(dataset_paths[split].items())
         # TODO process multiple files in parallel (in proportion to #CPU)
+        #      use eager execution and multiprocessing?
         for example in example_iter:
             # example = [str(ID), dict({str(type): str(path)})]
             features = {}
@@ -166,7 +167,8 @@ def main(args):
             tf_features = tf.train.Features(feature=features)
             tf_example  = tf.train.Example(features=tf_features)
             filename = example[0] + ".tfrecord"
-            with tf.gfile.Open(os.path.join(split_path, filename), 'wb') as f:
+            with tf.io.TFRecordWriter(
+                    os.path.join(split_path, filename)) as f:
                 f.write(tf_example.SerializeToString())
     # Write feature keys in order to dynamically being able to reconstruct the
     # content of the records when reading the records.
@@ -213,6 +215,7 @@ if __name__ == "__main__":
                         dest="output_dir", \
                         required=True, \
                         help="Path to where to store the records.")
+    # TODO: make this a little nicer
     parser.add_argument(
         "-e", "--extra", type=str, nargs="*",
         dest="extra", required=False,
