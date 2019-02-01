@@ -25,7 +25,8 @@ except ImportError:
 
 def _bytes_feature(value):
   """Returns a bytes_list from a string / byte."""
-  _bytes = value if not isinstance(value, str) else value.encode()
+  _bytes = value if not (isinstance(value, str) and sys.version_info[0] == 3) \
+                 else value.encode()
   return tf.train.Feature(bytes_list=tf.train.BytesList(value=[_bytes]))
 
 def _int64_feature(value):
@@ -33,10 +34,18 @@ def _int64_feature(value):
   return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
 def main(args):
+    support = None
+
     if args.dataset[0].lower() == "cityscapes":
-        from support.cityscapes import file_associations, label_mapping
+        from support.cityscapes import SupportLayer
+        use_coarse = True if args.extra is not None and \
+                             "coarse" in args.extra[0].lower() \
+                     else False
+        support = SupportLayer(use_coarse)
     elif args.dataset[0].lower() == "freiburg":
-        from support.freiburg import file_associations, label_mapping
+        from support.freiburg import SupportLayer
+        modalities = None if args.extra is None else args.extra
+        support = SupportLayer(modalities)
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
@@ -47,7 +56,7 @@ def main(args):
     jpg_decoding = tf.image.decode_jpeg(file_contents)
     png_decoding = tf.image.decode_png(file_contents)
     # Remapping of labels (can only be png)
-    labels_mapped   = label_mapping(png_decoding)
+    labels_mapped   = support.label_mapping(png_decoding)
     labels_encoding = tf.image.encode_png(labels_mapped)
     # Get the shape of image / labels to assert them equal
     png_image_shape = tf.shape(png_decoding)
@@ -58,10 +67,13 @@ def main(args):
     ##########################################################
 
     if os.path.exists(args.data_dir[0]):
-        dataset_paths = file_associations(args.data_dir[0])
+        dataset_paths = support.file_associations(args.data_dir[0])
+    else:
+        raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir[0])
 
     if not os.path.exists(args.output_dir[0]):
-        sys.stdout.write("Directory \"%s\" does not exist. " % args.output_dir[0])
+        sys.stdout.write("Directory \"%s\" does not exist. "
+                         % args.output_dir[0])
         sys.stdout.write("Do you want to create it? [y/N] ")
         sys.stdout.flush()
         user_input = sys.stdin.read(1)

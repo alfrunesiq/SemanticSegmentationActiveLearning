@@ -113,69 +113,72 @@ id2trainId_tf = tf.constant(id2trainId, dtype=tf.uint8)
 #-------------------------------------------------------------------------------
 # Support functions - ID mappings and file association list
 #-------------------------------------------------------------------------------
-def label_mapping(label_image):
-    """
-    Employs the lookup table @id2trainId for converting dataset label id to
-    training label indices.
-    NOTE: labels that should be ignored are mapped to the value 255
-          remember to mask these pixels when evaluating the loss
+class SupportLayer:
+    def __init__(self, coarse=False):
+        self.coarse = coarse
 
-    :param label_image: Segmentation ground truth image
-    :returns: The converted image as a tensorflow tensor.
-    :rtype:   tf.Tensor
-    """
-    labels_int32 = tf.to_int32(label_image)
-    return tf.nn.embedding_lookup(id2trainId_tf, labels_int32)
+    def label_mapping(self, label_image):
+        """
+        Employs the lookup table @id2trainId for converting dataset label id to
+        training label indices.
+        NOTE: labels that should be ignored are mapped to the value 255
+              remember to mask these pixels when evaluating the loss
 
-def file_associations(root_path, coarse=False):
-    """
-    Returns a dictionary of file associations between raw image data and
-    semantic labels.
+        :param label_image: Segmentation ground truth image
+        :returns: The converted image as a tensorflow tensor.
+        :rtype:   tf.Tensor
+        """
+        labels_int32 = tf.to_int32(label_image)
+        return tf.nn.embedding_lookup(id2trainId_tf, labels_int32)
 
-    :param root_path: path to dataset root directory
-    :param coarse:    whether to use the coarsely annotated dataset
-    :returns: dictionary of file associations for each split
-    :rtype:   dict{str: list(tuple(str,str))}
-    """
-    # The dataset is organized using following filename paths
-    #{root}/{type}{video}/{split}/{city}/{city}_{seq:0>6}_{frame:0>6}_{type}{ext}
-    label_type = "gtCoarse" if coarse else "gtFine"
-    image_type = "leftImg8bit"
-    image_path_base = os.path.join(root_path, image_type)
-    label_path_base = os.path.join(root_path, label_type)
-    _file_associations = {
-        "train": {},
-        "val":   {},
-        "test":  {}
-    }
-    if coarse:
-        _file_associations["train_extra"] = {}
+    def file_associations(self, root_path):
+        """
+        Returns a dictionary of file associations between raw image data and
+        semantic labels.
 
-    # Iterate over file tree and associate image and label paths
-    for split in _file_associations.keys():
-        # Update path to {split} scope
-        image_path_split = os.path.join(image_path_base, split)
-        label_path_split = os.path.join(label_path_base, split)
-        for city in os.listdir(label_path_split):
-            # Update path to {city} scope
-            image_path_city = os.path.join(image_path_split, city)
-            label_path_city = os.path.join(label_path_split, city)
-            # TODO this could be vectorized
-            for filename in os.listdir(label_path_city):
-                label_id = filename.split("_")
-                # file_id = [city, seq, frame, type, ext]
-                # filter out instance seg. labels and polygon description files
-                if label_id[-1] != "labelIds.png":
-                    continue
-                file_id = "_".join(label_id[:-1])
-                # Construct the corresponding raw image filename
-                image_id = label_id[:-1]
-                image_id[-1] = (image_type + ".png")
-                image_name = "_".join(image_id)
-                # Construct file association entry
-                image_path = os.path.join(image_path_city, image_name)
-                label_path = os.path.join(label_path_city, filename)
-                _file_associations[split][file_id] = {}
-                _file_associations[split][file_id]["image"] = image_path
-                _file_associations[split][file_id]["label"] = label_path
-    return _file_associations
+        :param root_path: path to dataset root directory
+        :returns: dictionary of file associations for each split
+        :rtype:   dict{str: list(tuple(str,str))}
+        """
+        # The dataset is organized using following filename paths
+        #{root}/{type}{video}/{split}/{city}/{city}_{seq:0>6}_{frame:0>6}_{type}{ext}
+        label_type = "gtCoarse" if self.coarse else "gtFine"
+        image_type = "leftImg8bit"
+        image_path_base = os.path.join(root_path, image_type)
+        label_path_base = os.path.join(root_path, label_type)
+        _file_associations = {
+            "train": {},
+            "val":   {},
+            "test":  {}
+        }
+        if self.coarse:
+            _file_associations["train_extra"] = {}
+
+        # Iterate over file tree and associate image and label paths
+        for split in _file_associations.keys():
+            # Update path to {split} scope
+            image_path_split = os.path.join(image_path_base, split)
+            label_path_split = os.path.join(label_path_base, split)
+            for city in os.listdir(label_path_split):
+                # Update path to {city} scope
+                image_path_city = os.path.join(image_path_split, city)
+                label_path_city = os.path.join(label_path_split, city)
+                # TODO this could be vectorized
+                for filename in os.listdir(label_path_city):
+                    label_id = filename.split("_")
+                    # file_id = [city, seq, frame, type, ext]
+                    # filter out instance seg. labels and polygon description files
+                    if label_id[-1] != "labelIds.png":
+                        continue
+                    file_id = "_".join(label_id[:-1])
+                    # Construct the corresponding raw image filename
+                    image_id = label_id[:-1]
+                    image_id[-1] = (image_type + ".png")
+                    image_name = "_".join(image_id)
+                    # Construct file association entry
+                    image_path = os.path.join(image_path_city, image_name)
+                    label_path = os.path.join(label_path_city, filename)
+                    _file_associations[split][file_id] = {}
+                    _file_associations[split][file_id]["image"] = image_path
+                    _file_associations[split][file_id]["label"] = label_path
+        return _file_associations

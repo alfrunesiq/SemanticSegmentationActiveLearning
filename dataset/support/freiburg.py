@@ -13,7 +13,6 @@ import tensorflow as tf
 
 # a label and all meta information
 Label = namedtuple( 'Label' , [
-
     'name'    , # label name
     'id'      , # id in the dataset "README"
     'trainId' , # label training id
@@ -39,44 +38,52 @@ for label in labels[1:]:
     green2trainId[label.color[1]] = label.trainId
 tf_green2trainId = tf.constant(green2trainId, dtype=tf.uint8)
 
-def label_mapping(label_image):
-    # TODO insert docstring here
-    _, green, _ = tf.split(label_image, 3, axis=-1)
-    green_int32 = tf.to_int32(green)
-    return tf.nn.embedding_lookup(tf_green2trainId, green_int32)
+class SupportLayer:
+    def __init__(self, modalities=None):
+        self.modalities = modalities
 
-def file_associations(root_path):
-    #TODO add docstring
-    image_dir = "rgb"
-    label_dir = "GT_color"
-    nir_dir   = "nir_gray"
+    def label_mapping(self, label_image):
+        # TODO insert docstring here
+        _, green, _ = tf.split(label_image, 3, axis=-1)
+        green_int32 = tf.to_int32(green)
+        return tf.nn.embedding_lookup(tf_green2trainId, green_int32)
 
-    _file_associations = {
-        "train": {},
-        "test":  {}
-    }
-    # _file_associations = {split: {id: {image/label/nir: path}}}
-    for split in _file_associations.keys():
-        # setup paths
-        split_path = os.path.join(root_path, split)
-        image_path = os.path.join(split_path, image_dir)
-        label_path = os.path.join(split_path, label_dir)
-        nir_path   = os.path.join(split_path, nir_dir)
-        # create a dictionary of filename lookup tables due to the poor naming
-        # of this dataset (in addition to the whole shape thing...)
-        for filename in os.listdir(image_path):
-            # Some _file_associations[split] has a "_Clipped" or "_mask" postfix
-            image_id = filename.split(".")[0].split("_")[0]
-            file_path = os.path.join(image_path, filename)
-            _file_associations[split][image_id] = {}
-            _file_associations[split][image_id]["image"] = file_path
-        for filename in os.listdir(label_path):
-            image_id = filename.split(".")[0].split("_")[0]
-            file_path = os.path.join(label_path, filename)
-            _file_associations[split][image_id]["label"] = file_path
-        for filename in os.listdir(nir_path):
-            image_id = filename.split(".")[0].split("_")[0]
-            file_path = os.path.join(nir_path, filename)
-            _file_associations[split][image_id]["nir"] = file_path
+    def file_associations(self, root_path):
+        #TODO add docstring
+        image_dir = "rgb"
+        label_dir = "GT_color"
+        nir_dir   = "nir_gray"
+        if self.modalities == None:
+            self.modalities = ["rgb"]
+        elif not isinstance(self.modalities, list):
+            raise ValueError(
+                "ERROR: Modalities need to be a list of strings "
+                "containing the name of modalities as in the dataset "
+                "filetree, e.g. {rgb,nir_gray,...}.")
 
-    return _file_associations
+        _file_associations = {
+            "train": {},
+            "test":  {}
+        }
+        # _file_associations = {split: {id: {image/label/nir: path}}}
+        for split in _file_associations.keys():
+            # setup paths
+            split_path = os.path.join(root_path, split)
+            label_path = os.path.join(split_path, label_dir)
+            # create a dictionary of filename lookup tables and mind the poor
+            # naming convension of this dataset
+            for filename in os.listdir(label_path):
+                # Some _file_associations[split] has a "_Clipped" or "_mask" postfix
+                _id = filename.split(".")[0].split("_")[0]
+                file_path = os.path.join(label_path, filename)
+                _file_associations[split][_id] = {}
+                _file_associations[split][_id]["label"] = file_path
+            for modality in self.modalities:
+                mod_path = os.path.join(split_path, modality)
+                if modality == "rgb":
+                    modality = "image" # to be consistent with other datasets
+                for filename in os.listdir(mod_path):
+                    _id = filename.split(".")[0].split("_")[0]
+                    file_path = os.path.join(mod_path, filename)
+                    _file_associations[split][_id][modality] = file_path
+        return _file_associations
