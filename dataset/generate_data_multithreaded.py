@@ -13,7 +13,10 @@ import argparse
 import numpy as np
 import tensorflow as tf
 
-tf.enable_eager_execution()
+
+config = tf.ConfigProto()
+config.gpu_options.visible_device_list = ""
+tf.enable_eager_execution(config=config)
 show_progress = False
 try:
     from tqdm import tqdm
@@ -28,7 +31,7 @@ except ImportError:
 def _bytes_feature(value):
     """Returns a bytes_list from a string / byte."""
     _bytes = None
-    if isinstance(_bytes, str):
+    if isinstance(value, str):
         _bytes = value.encode()
     else:
         _bytes = value
@@ -98,12 +101,13 @@ def record_example(example):
             label_encoding = tf.io.read_file(path)
             label_decoding = tf.image.decode_png(label_encoding)
             # Remapping of labels (can only be png)
-            LUT = support.get_label_mapping()
             label_decoding = np.array(label_decoding)
-            if np.array(label_decoding).shape[-1] == 3:
+            LUT = support.get_label_mapping()
+            if np.array(label_decoding.shape)[-1] == 3:
                 # use green channel
                 label_decoding = label_decoding[:,:,1].astype(np.int32)
                 label_decoding = np.expand_dims(label_decoding, axis=-1)
+            # A bit awkward, but TF won't let do tf.nn.embedding_lookup
             label_decoding = LUT[label_decoding]
 
             label_encoding  = tf.image.encode_png(label_decoding)

@@ -10,6 +10,7 @@ from collections import namedtuple
 
 import os
 
+import numpy as np
 import tensorflow as tf
 
 #-------------------------------------------------------------------------------
@@ -131,7 +132,7 @@ class SupportLayer:
         labels_int32 = tf.to_int32(label_image)
         return tf.nn.embedding_lookup(id2trainId_tf, labels_int32)
     def get_label_mapping(self):
-        return np.array(id2trainId)
+        return np.array(id2trainId, dtype=np.uint8)
 
     def file_associations(self, root_path):
         """
@@ -151,10 +152,11 @@ class SupportLayer:
         _file_associations = {
             "train": {},
             "val":   {},
-            "test":  {}
         }
         if self.coarse:
             _file_associations["train_extra"] = {}
+        else:
+            _file_associations["test"] = {}
 
         # Iterate over file tree and associate image and label paths
         for split in _file_associations.keys():
