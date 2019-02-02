@@ -1,5 +1,6 @@
 import tensorflow as tf
-import extra_ops as xops
+
+from ..util import extra_ops as xops
 
 def block_initial(inputs, is_training, \
                   padding="SAME", \
@@ -35,8 +36,10 @@ def block_initial(inputs, is_training, \
     with tf.variable_scope(name):
         with tf.name_scope("ShapeOps"):
             # shape(inputs)=[N,H,W,C]
+            input_shape = inputs.get_shape().as_list()
             # Get input channel count
-            input_ch = inputs.shape[-1]
+            input_ch = input_shape[-1] if input_shape[-1] != None \
+                                       else inputs.shape[-1]
             # output width is concatenation of max pool and conv
             conv_width = output_width - input_ch
             conv_kern_shape = [3,3,input_ch,conv_width]
@@ -129,7 +132,9 @@ def block_bottleneck(inputs, \
 
         with tf.name_scope("ShapeOps"):
             # Get input channel count
-            input_ch = inputs.shape[-1]
+            input_shape = inputs.get_shape().as_list()
+            input_ch = input_shape[-1] if input_shape[-1] != None \
+                                       else inputs.shape[-1]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
             bneck_filters = input_ch // projection_rate
@@ -323,10 +328,16 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
     with tf.variable_scope(name):
 
         with tf.name_scope("ShapeOps"):
-            # Get input channel count
-            input_shape = tf.shape(inputs, name="InputShape")
-            input_ch    = inputs.shape[3]
-            batch_sz    = input_shape[0]
+            # Get input shape (batch dim. is assumed unresolvable)
+            shape    = tf.shape(inputs, name="InputShape")
+            batch_sz = shape[0]
+            # Check if height / width / channels are resolvable
+            input_shape = inputs.get_shape().as_list()
+            if input_shape[1] == None or input_shape[2] == None \
+                                      or input_shape[3] == None:
+                input_shape = shape
+
+            input_ch    = input_shape[3]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
             bneck_filters = input_ch // projection_rate
@@ -634,10 +645,15 @@ def block_final(inputs, num_classes, \
     variables = {}
     with tf.variable_scope(name):
         with tf.name_scope("ShapeOps"):
-            input_shape = tf.shape(inputs, name="InputShape")
-            out_shape   = tf.stack([input_shape[0],2*input_shape[1], \
-                                    2*input_shape[1],num_classes])
-            kern_shape  = [3,3,num_classes,inputs.shape[-1]]
+            shape    = tf.shape(inputs, name="InputShape")
+            batch_sz = shape[0]
+            # Check if height / width is resolvable
+            input_shape = inputs.get_shape().as_list()
+            if input_shape[1] == None or input_shape[2] == None:
+                input_shape = shape
+            out_shape  = tf.stack([batch_sz,2*input_shape[1],
+                                   2*input_shape[2],num_classes])
+            kern_shape = [3,3,num_classes,inputs.shape[-1]]
 
         kern = tf.get_variable(name="Kernel", \
                                dtype=tf.float32, \
