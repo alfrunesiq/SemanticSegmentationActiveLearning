@@ -38,7 +38,7 @@ for label in labels[1:]:
     green2trainId[label.color[1]] = label.trainId
 tf_green2trainId = tf.constant(green2trainId, dtype=tf.uint8)
 
-class SupportLayer:
+class Freiburg:
     def __init__(self, modalities=None):
         self.modalities = modalities
 

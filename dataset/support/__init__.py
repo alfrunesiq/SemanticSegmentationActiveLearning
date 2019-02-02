@@ -1,3 +1,3 @@
 # Python2 compatibility
-from . import cityscapes
-from . import freiburg
+from .cityscapes import Cityscapes
+from .freiburg import Freiburg

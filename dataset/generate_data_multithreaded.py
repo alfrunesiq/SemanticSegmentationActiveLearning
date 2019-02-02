@@ -13,10 +13,13 @@ import argparse
 import numpy as np
 import tensorflow as tf
 
-
 config = tf.ConfigProto()
 config.gpu_options.visible_device_list = ""
 tf.enable_eager_execution(config=config)
+
+import support
+
+
 show_progress = False
 try:
     from tqdm import tqdm
@@ -41,20 +44,18 @@ def _int64_feature(value):
     """Returns an int64_list from a bool / enum / int / uint."""
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
-support = None; split_path = None
+helper = None; split_path = None
 def proc_initializer(args, path):
-    global support, split_path
+    global helper, split_path
     split_path = path
     if args.dataset[0].lower() == "cityscapes":
-        from support.cityscapes import SupportLayer
         use_coarse = True if args.extra is not None and \
                              "coarse" in args.extra[0].lower() \
                      else False
-        support = SupportLayer(use_coarse)
+        helper = support.Cityscapes(use_coarse)
     elif args.dataset[0].lower() == "freiburg":
-        from support.freiburg import SupportLayer
         modalities = None if args.extra is None else args.extra
-        support = SupportLayer(modalities)
+        helper = support.Freiburg(modalities)
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
@@ -102,7 +103,7 @@ def record_example(example):
             label_decoding = tf.image.decode_png(label_encoding)
             # Remapping of labels (can only be png)
             label_decoding = np.array(label_decoding)
-            LUT = support.get_label_mapping()
+            LUT = helper.get_label_mapping()
             if np.array(label_decoding.shape)[-1] == 3:
                 # use green channel
                 label_decoding = label_decoding[:,:,1].astype(np.int32)
@@ -148,20 +149,18 @@ def record_example(example):
 
 def main(args):
     if args.dataset[0].lower() == "cityscapes":
-        from support.cityscapes import SupportLayer
         use_coarse = True if args.extra is not None and \
                              "coarse" in args.extra[0].lower() \
                      else False
-        support = SupportLayer(use_coarse)
+        helper = support.Cityscapes(use_coarse)
     elif args.dataset[0].lower() == "freiburg":
-        from support.freiburg import SupportLayer
         modalities = None if args.extra is None else args.extra
-        support = SupportLayer(modalities)
+        helper = support.Freiburg(modalities)
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
     if os.path.exists(args.data_dir[0]):
-        dataset_paths = support.file_associations(args.data_dir[0])
+        dataset_paths = helper.file_associations(args.data_dir[0])
     else:
         raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir[0])
 
@@ -176,7 +175,6 @@ def main(args):
         else:
             os.makedirs(args.output_dir[0])
 
-    sess = tf.Session()
     for split in dataset_paths.keys():
         # Create directory for the split
         split_path = os.path.join(args.output_dir[0], split)

@@ -12,6 +12,8 @@ import argparse
 import numpy as np
 import tensorflow as tf
 
+import support
+
 show_progress = False
 try:
     from tqdm import tqdm
@@ -34,18 +36,16 @@ def _int64_feature(value):
   return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
 def main(args):
-    support = None
+    helper = None
 
     if args.dataset[0].lower() == "cityscapes":
-        from support.cityscapes import SupportLayer
         use_coarse = True if args.extra is not None and \
                              "coarse" in args.extra[0].lower() \
                      else False
-        support = SupportLayer(use_coarse)
+        helper = support.Cityscapes(use_coarse)
     elif args.dataset[0].lower() == "freiburg":
-        from support.freiburg import SupportLayer
         modalities = None if args.extra is None else args.extra
-        support = SupportLayer(modalities)
+        helper = support.Freiburg(modalities)
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
@@ -56,7 +56,7 @@ def main(args):
     jpg_decoding = tf.image.decode_jpeg(file_contents)
     png_decoding = tf.image.decode_png(file_contents)
     # Remapping of labels (can only be png)
-    labels_mapped   = support.label_mapping(png_decoding)
+    labels_mapped   = helper.label_mapping(png_decoding)
     labels_encoding = tf.image.encode_png(labels_mapped)
     # Get the shape of image / labels to assert them equal
     png_image_shape = tf.shape(png_decoding)
@@ -67,7 +67,7 @@ def main(args):
     ##########################################################
 
     if os.path.exists(args.data_dir[0]):
-        dataset_paths = support.file_associations(args.data_dir[0])
+        dataset_paths = helper.file_associations(args.data_dir[0])
     else:
         raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir[0])
 
@@ -82,7 +82,11 @@ def main(args):
         else:
             os.makedirs(args.output_dir[0])
 
-    sess = tf.Session()
+    # Create session on CPU
+    config = tf.ConfigProto()
+    config.gpu_options.visible_device_list = ""
+    sess = tf.Session(config=config)
+    # Write records for each split
     for split in dataset_paths.keys():
         # Create directory for the split
         split_path = os.path.join(args.output_dir[0], split)
@@ -94,8 +98,8 @@ def main(args):
                                 desc="%-7s" % split)
         else:
             example_iter = list(dataset_paths[split].items())
-        # TODO process multiple files in parallel (in proportion to #CPU)
-        #      use eager execution and multiprocessing?
+        # Iterate over all examples in split and gather samples in
+        # separate records
         for example in example_iter:
             # example = [str(ID), dict({str(type): str(path)})]
             features = {}

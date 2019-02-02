@@ -114,7 +114,7 @@ id2trainId_tf = tf.constant(id2trainId, dtype=tf.uint8)
 #-------------------------------------------------------------------------------
 # Support functions - ID mappings and file association list
 #-------------------------------------------------------------------------------
-class SupportLayer:
+class Cityscapes:
     def __init__(self, coarse=False):
         self.coarse = coarse
 
