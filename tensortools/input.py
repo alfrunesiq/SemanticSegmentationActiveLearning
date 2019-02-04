@@ -16,17 +16,17 @@ class InputStage:
     matches.
     """
     def __init__(self, record_fmt, batch_size,
-                 input_size=[512,512]):
+                 input_shape=[512,512,3]):
         """
         Initializes the @InputStage class
 
         :param record_fmt: dict with TFRecord layout mapping record keys
                            to tf.[Fixed|Var]LenFeature.
-        :param batch_size: Batch size for the dataset pipeline
-        :param input_size: Input size to the network
+        :param batch_size:  Batch size for the dataset pipeline
+        :param input_shape: Input shape of the network
         """
         self.fmt        = record_fmt
-        self.size       = size
+        self.shape      = input_shape
         self.batch_size = batch_size
         self.datasets   = {}
         self.iterator   = None
@@ -52,7 +52,12 @@ class InputStage:
                           parsed TFRecord examples. The function takes a
                           parsed example as argument.
         """
-        filenames = os.path.join(path, "*.tfrecord")
+        filenames = []
+        if isinstance(path, list):
+            for _dir in path:
+                filenames.append(os.path.join(_dir, "*.tfrecord"))
+        else:
+            filenames = os.path.join(path, "*.tfrecord")
         parse_fn = lambda x: tf.io.parse_single_example(x, self.fmt,
                                                         name="ParseExample")
         with tf.name_scope("Dataset"):
@@ -68,7 +73,12 @@ class InputStage:
                 dataset = dataset.map(parse_fn)
                 # Decode images
                 if decode_fn == None:
-                    dataset = dataset.map(self._default_decoder)
+                    if augment == None:
+                        decoder = lambda x: \
+                                  self._default_decoder(x, crop_and_split=True)
+                        dataset = dataset.map(decoder)
+                    else:
+                        dataset = dataset.map(self._default_decoder)
                 else:
                     dataset = dataset.map(decode_fn)
                 # Data augmentation
@@ -77,9 +87,11 @@ class InputStage:
                         dataset = dataset.map(augment)
                     else:
                         dataset = dataset.map(self._default_augmentation)
+
                 # Batch and prefetch image/label data
-                dataset = dataset.batch(batch_size)
-                dataset = dataset.prefetch(batch_size)
+                if self.batch_size > 1:
+                    dataset = dataset.batch(self.batch_size)
+                dataset = dataset.prefetch(self.batch_size)
             # END scope @name
 
             self.datasets[name] = dataset
@@ -116,7 +128,7 @@ class InputStage:
         sess.run(self._init_ops[name])
         return self.iterator.get_next()
 
-    def _default_decoder(self, example):
+    def _default_decoder(self, example, crop_and_split=False):
         """
         Decodes all images in example and stacks all channels along with
         the decoded label image in the last channel.
@@ -135,13 +147,25 @@ class InputStage:
                                                   dtype=tf.uint8,
                                                   name="DecodeImage")
                 images.append(image)
-        print(images)
         # Decode label image
         label = tf.image.decode_png(example["label"], channels=1,
                                     name="DecodeLabel")
         # Stack the images' channels and label image
-        image_stack = tf.concat(images+[label], axis=-1, name="StackImages")
-        return image_stack
+        image_stack = tf.concat(images+[label], axis=2, name="StackImages")
+        image_stack.set_shape([None,None,3])
+        if not crop_and_split:
+            return image_stack
+        else:
+            stack_shape = tf.shape(image_stack)
+            center = [stack_shape[0]//2, stack_shape[1]//2]
+            top_left = [center[0]-self.shape[0]//2,
+                        center[1]-self.shape[1]//2]
+            crop = tf.image.crop_to_bounding_box(image_stack,
+                                                 top_left[0], top_left[1],
+                                                 self.size[0], self.size[1])
+            image = crop[:,:,:self.shape[-1]]
+            label = crop[:,:,self.shape[-1]:]
+            return image, label
 
     def _default_augmentation(self, images):
         """
@@ -152,20 +176,19 @@ class InputStage:
         :rtype:   tf.Tensor, tf.Tensor
         """
         with tf.name_scope("DataAugmentation"):
-            images_shape = tf.shape(images, name="ImagesShape")
-            channels     = images_shape[-1]
-            crop_shape   = tf.stack(self.size + [channels])
-            img_channels = channels - 1
+            channels   = self.shape[-1]
+            crop_shape = self.shape
+            crop_shape[-1] += 1
             # Random channelwise pixel intensity scaling
-            px_scaling = tf.random.uniform(shape=[img_channels], maxval=1.5,
+            px_scaling = tf.random.uniform(shape=[channels], maxval=1.5,
                                              minval=0.8, dtype=tf.float32)
             # Crop out a sizable portion randomly
             image_crop = tf.random_crop(images, crop_shape,
                                         name="RandomCrop")
             image_crop = tf.image.random_flip_left_right(image_crop)
             # Slice out the image stack and label
-            image = image_crop[:,:,:img_channels] # [h,w,c]
-            label = image_crop[:,:,img_channels:] # [h,w,1]
+            image = image_crop[:,:,:channels] # [h,w,c]
+            label = image_crop[:,:,channels:] # [h,w,1]
             # NOTE this also scales values to range [0.0, 1.0]
             image = tf.image.convert_image_dtype(image, tf.float32,
                                                  name="ToFloat")

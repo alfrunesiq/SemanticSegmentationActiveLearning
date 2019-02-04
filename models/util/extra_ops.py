@@ -62,6 +62,8 @@ def unpool_2d(inputs,
         # UPDATE: there is a BUG in Tensorflow behaviour, apparently the above
         #         remark only applies to CPU implementation of the op.
         #         https://github.com/tensorflow/tensorflow/pull/23993
+        # NOTE: to run on CPU, comment out next two statements and
+        #       change first argument to idx in scatter_nd
         batch_range = tf.reshape(tf.range(output_shape[0], dtype=idx.dtype),
                                  shape=[input_shape[0], 1, 1, 1])*out_img_size
         idx_sc = idx + batch_range

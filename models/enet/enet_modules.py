@@ -2,9 +2,10 @@ import tensorflow as tf
 
 from ..util import extra_ops as xops
 
-def block_initial(inputs, is_training, \
-                  padding="SAME", \
-                  output_width=16, \
+def block_initial(inputs, is_training,
+                  padding="SAME",
+                  kernel_initializer=tf.initializers.glorot_uniform(),
+                  output_width=16,
                   name="Initial"):
     """
     ENet initial block:
@@ -24,7 +25,7 @@ def block_initial(inputs, is_training, \
                 | Concat |
                 +--------+
 
-    :param inputs:       Input tensor
+    :param inputs:       Input tensor (format=[N,H,W,C])
     :param padding:      Padding for the conv operation
     :param output_width: Number of channels for the output tensor
     :param name:         Name of the scope for the block
@@ -38,41 +39,42 @@ def block_initial(inputs, is_training, \
             # shape(inputs)=[N,H,W,C]
             input_shape = inputs.get_shape().as_list()
             # Get input channel count
-            input_ch = input_shape[-1] if input_shape[-1] != None \
-                                       else inputs.shape[-1]
+            # NOTE: input channel shape need to be deterministic
+            input_ch = input_shape[3]
+
             # output width is concatenation of max pool and conv
             conv_width = output_width - input_ch
             conv_kern_shape = [3,3,input_ch,conv_width]
         # Get conv. kernel
-        kern     = tf.get_variable(name="Kernel", \
-                                   shape=conv_kern_shape, \
-                                   initializer=tf.glorot_uniform_initializer(), \
+        kern     = tf.get_variable(name="Kernel",
+                                   shape=conv_kern_shape,
+                                   initializer=tf.glorot_uniform_initializer(),
                                    trainable=True)
-        out_conv = tf.nn.conv2d(inputs, kern, \
-                                strides=[1,2,2,1], \
-                                padding=padding, \
+        out_conv = tf.nn.conv2d(inputs, kern,
+                                strides=[1,2,2,1],
+                                padding=padding,
                                 name="Conv2D")
-        out_mp   = tf.nn.max_pool(inputs, \
-                                  ksize=[1,2,2,1], \
-                                  strides=[1,2,2,1], \
-                                  padding=padding, \
+        out_mp   = tf.nn.max_pool(inputs,
+                                  ksize=[1,2,2,1],
+                                  strides=[1,2,2,1],
+                                  padding=padding,
                                   name="MaxPool")
-        out      = tf.concat([out_conv, out_mp], \
-                              axis=3, \
+        out      = tf.concat([out_conv, out_mp],
+                              axis=3,
                               name="Concat")
     params["Kernel"] = kern
     return out, params
 
-def block_bottleneck(inputs, \
-                     is_training, \
-                     padding="SAME", \
-                     projection_rate=4, \
-                     dilations=[1,1,1,1], \
-                     bn_decay=0.90, \
-                     asymmetric=False, \
-                     kernel_initializer=tf.initializers.glorot_uniform(), \
-                     alpha_initializer=tf.initializers.constant(0.25), \
-                     drop_rate=0.1, \
+def block_bottleneck(inputs,
+                     is_training,
+                     padding="SAME",
+                     projection_rate=4,
+                     dilations=[1,1,1,1],
+                     bn_decay=0.90,
+                     asymmetric=False,
+                     kernel_initializer=tf.initializers.glorot_uniform(),
+                     alpha_initializer=tf.initializers.constant(0.25),
+                     drop_rate=0.1,
                      name="Bottleneck"):
     """
     Implements the plain bottleneck module in ENet, including possibility
@@ -133,8 +135,7 @@ def block_bottleneck(inputs, \
         with tf.name_scope("ShapeOps"):
             # Get input channel count
             input_shape = inputs.get_shape().as_list()
-            input_ch = input_shape[-1] if input_shape[-1] != None \
-                                       else inputs.shape[-1]
+            input_ch = input_shape[-1]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
             bneck_filters = input_ch // projection_rate
@@ -142,8 +143,8 @@ def block_bottleneck(inputs, \
             proj_kern_shape = [1,1,input_ch,bneck_filters]
             if asymmetric:
                 conv_kern_shape = [ \
-                        [5,1,bneck_filters,bneck_filters], \
-                        [1,5,bneck_filters,bneck_filters], \
+                        [5,1,bneck_filters,bneck_filters],
+                        [1,5,bneck_filters,bneck_filters],
                 ]
             else:
                 conv_kern_shape = [3,3,bneck_filters,bneck_filters]
@@ -153,21 +154,21 @@ def block_bottleneck(inputs, \
         ############ Main Branch ############
         with tf.variable_scope("DownProject"):
             # Bottleneck projection operation
-            alpha = tf.get_variable(name="Alpha", \
-                                    dtype=tf.float32, \
-                                    initializer=alpha_initializer, \
-                                    shape=[bneck_filters], \
+            alpha = tf.get_variable(name="Alpha",
+                                    dtype=tf.float32,
+                                    initializer=alpha_initializer,
+                                    shape=[bneck_filters],
                                     trainable=True)
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=proj_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=proj_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d(inputs, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
+            out = tf.nn.conv2d(inputs, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                       decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
             variables["DownProject"] = {}
@@ -177,48 +178,48 @@ def block_bottleneck(inputs, \
 
         with tf.variable_scope("Conv"):
             # Main convolution operation
-            alpha = tf.get_variable(name="Alpha", \
-                                    dtype=tf.float32, \
-                                    initializer=alpha_initializer, \
-                                    shape=[bneck_filters], \
+            alpha = tf.get_variable(name="Alpha",
+                                    dtype=tf.float32,
+                                    initializer=alpha_initializer,
+                                    shape=[bneck_filters],
                                     trainable=True)
             if asymmetric:
 
                 kern = [ \
-                         tf.get_variable(name="KernelCol", \
-                                         dtype=tf.float32, \
-                                         initializer=kernel_initializer, \
-                                         shape=conv_kern_shape[0], \
+                         tf.get_variable(name="KernelCol",
+                                         dtype=tf.float32,
+                                         initializer=kernel_initializer,
+                                         shape=conv_kern_shape[0],
                                          trainable=True),
-                         tf.get_variable(name="KernelRow", \
-                                         dtype=tf.float32, \
-                                         initializer=kernel_initializer, \
-                                         shape=conv_kern_shape[1], \
+                         tf.get_variable(name="KernelRow",
+                                         dtype=tf.float32,
+                                         initializer=kernel_initializer,
+                                         shape=conv_kern_shape[1],
                                          trainable=True)
                 ]
-                out = tf.nn.conv2d(out, kern[0], \
-                                   strides=[1,1,1,1], \
-                                   padding=padding, \
-                                   dilations=dilations, \
+                out = tf.nn.conv2d(out, kern[0],
+                                   strides=[1,1,1,1],
+                                   padding=padding,
+                                   dilations=dilations,
                                    name="Conv2D")
-                out = tf.nn.conv2d(out, kern[1], \
-                                   strides=[1,1,1,1], \
-                                   padding=padding, \
-                                   dilations=dilations, \
+                out = tf.nn.conv2d(out, kern[1],
+                                   strides=[1,1,1,1],
+                                   padding=padding,
+                                   dilations=dilations,
                                    name="Conv2D")
             else:
-                kern = tf.get_variable(name="Kernel", \
-                                       dtype=tf.float32, \
-                                       initializer=kernel_initializer, \
-                                       shape=conv_kern_shape, \
+                kern = tf.get_variable(name="Kernel",
+                                       dtype=tf.float32,
+                                       initializer=kernel_initializer,
+                                       shape=conv_kern_shape,
                                        trainable=True)
-                out = tf.nn.conv2d(out, kern, \
-                                   strides=[1,1,1,1], \
-                                   padding=padding, \
-                                   dilations=dilations, \
+                out = tf.nn.conv2d(out, kern,
+                                   strides=[1,1,1,1],
+                                   padding=padding,
+                                   dilations=dilations,
                                    name="Conv2D")
 
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -230,16 +231,16 @@ def block_bottleneck(inputs, \
 
         with tf.variable_scope("Expansion"):
             # Feature expansion operation
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=exp_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=exp_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d(out, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
+            out = tf.nn.conv2d(out, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             if is_training and drop_rate > 0.0:
                 out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
@@ -250,10 +251,10 @@ def block_bottleneck(inputs, \
         # TODO: add spatial dropout here if is_training == True
         #####################################
 
-        alpha = tf.get_variable(name="Alpha", \
-                                shape=[input_ch], \
-                                dtype=tf.float32, \
-                                initializer=alpha_initializer, \
+        alpha = tf.get_variable(name="Alpha",
+                                shape=[input_ch],
+                                dtype=tf.float32,
+                                initializer=alpha_initializer,
                                 trainable=True)
         # NOTE: out comes from main branch
         out = tf.add(inputs, out, name="Residual")
@@ -265,14 +266,14 @@ def block_bottleneck(inputs, \
 # END def block_bottleneck
 
 
-def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
-                              padding="SAME", \
-                              projection_rate=4, \
-                              dilations=[1,1,1,1], \
-                              bn_decay=0.90, \
-                              kernel_initializer=tf.initializers.glorot_uniform(), \
-                              alpha_initializer=tf.initializers.constant(0.25), \
-                              drop_rate=0.1, \
+def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
+                              padding="SAME",
+                              projection_rate=4,
+                              dilations=[1,1,1,1],
+                              bn_decay=0.90,
+                              kernel_initializer=tf.initializers.glorot_uniform(),
+                              alpha_initializer=tf.initializers.constant(0.25),
+                              drop_rate=0.1,
                               name="BottleneckUpsample"):
     """
                      +-------+
@@ -344,8 +345,8 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
             # Get conv. kernels' shape
             proj_kern_shape = [1,1,input_ch,bneck_filters]
             conv_kern_shape = [3,3,bneck_filters,bneck_filters]
-            conv_out_shape  = tf.stack([batch_sz, 2*input_shape[1], \
-                                        2*input_shape[2], bneck_filters], \
+            conv_out_shape  = tf.stack([batch_sz, 2*input_shape[1],
+                                        2*input_shape[2], bneck_filters],
                                        name="ConvTsposeOutShape")
             # NOTE: upsampling halves the number of output channels following
             #       VGG-philosophy of preserving computational complexity
@@ -357,21 +358,21 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
         ############ Main Branch ############
         with tf.variable_scope("DownProject"):
             # Bottleneck projection operation
-            alpha = tf.get_variable(name="Alpha", \
-                                    shape=[bneck_filters], \
-                                    dtype=tf.float32, \
-                                    initializer=alpha_initializer, \
+            alpha = tf.get_variable(name="Alpha",
+                                    shape=[bneck_filters],
+                                    dtype=tf.float32,
+                                    initializer=alpha_initializer,
                                     trainable=True)
-            kern = tf.get_variable(name="Kernel", \
-                                   shape=proj_kern_shape, \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
+            kern = tf.get_variable(name="Kernel",
+                                   shape=proj_kern_shape,
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
                                    trainable=True)
-            out = tf.nn.conv2d(inputs, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
+            out = tf.nn.conv2d(inputs, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -383,20 +384,20 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
 
         with tf.variable_scope("Conv"):
             # Main convolution operation
-            alpha = tf.get_variable(name="Alpha", \
-                                    dtype=tf.float32, \
-                                    initializer=alpha_initializer, \
-                                    shape=[bneck_filters], \
+            alpha = tf.get_variable(name="Alpha",
+                                    dtype=tf.float32,
+                                    initializer=alpha_initializer,
+                                    shape=[bneck_filters],
                                     trainable=True)
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=conv_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=conv_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d_transpose(out, kern, conv_out_shape, \
-                                         strides=[1,2,2,1], \
+            out = tf.nn.conv2d_transpose(out, kern, conv_out_shape,
+                                         strides=[1,2,2,1],
                                          name="Conv2DTranspose")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -408,16 +409,16 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
 
         with tf.variable_scope("Expansion"):
             # Feature expansion operation
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=exp_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=exp_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d(out, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
+            out = tf.nn.conv2d(out, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             if is_training and drop_rate > 0.0:
                 out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
@@ -429,24 +430,24 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
         #####################################
 
         ########## Residual Branch ##########
-        kern = tf.get_variable(name="Kernel", \
-                               dtype=tf.float32, \
-                               initializer=kernel_initializer, \
-                               shape=res_kern_shape, \
+        kern = tf.get_variable(name="Kernel",
+                               dtype=tf.float32,
+                               initializer=kernel_initializer,
+                               shape=res_kern_shape,
                                trainable=True)
-        res_out = tf.nn.conv2d(inputs, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
+        res_out = tf.nn.conv2d(inputs, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
                                name="Conv2D")
-        res_out = xops.unpool_2d(res_out, unpool_argmax, \
+        res_out = xops.unpool_2d(res_out, unpool_argmax,
                                  strides=[1,2,2,1])
         variables["Kernel"] = kern
         #####################################
 
-        alpha = tf.get_variable(name="Alpha", \
-                                shape=[input_ch//2], \
-                                dtype=tf.float32, \
-                                initializer=alpha_initializer, \
+        alpha = tf.get_variable(name="Alpha",
+                                shape=[input_ch//2],
+                                dtype=tf.float32,
+                                initializer=alpha_initializer,
                                 trainable=True)
         # NOTE: out comes from main branch
         out = tf.add(res_out, out, name="Residual")
@@ -458,14 +459,14 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training, \
     return out, variables
 # END def block_bottleneck
 
-def block_bottleneck_downsample(inputs, is_training, \
-                                padding="SAME", \
-                                projection_rate=4, \
-                                bn_decay=0.90, \
-                                dilations=[1,1,1,1], \
-                                kernel_initializer=tf.initializers.glorot_uniform(), \
-                                alpha_initializer=tf.initializers.constant(0.25), \
-                                drop_rate=0.1, \
+def block_bottleneck_downsample(inputs, is_training,
+                                padding="SAME",
+                                projection_rate=4,
+                                bn_decay=0.90,
+                                dilations=[1,1,1,1],
+                                kernel_initializer=tf.initializers.glorot_uniform(),
+                                alpha_initializer=tf.initializers.constant(0.25),
+                                drop_rate=0.1,
                                 name="BottleneckDownsample"):
     """
                      +-------+
@@ -519,7 +520,7 @@ def block_bottleneck_downsample(inputs, is_training, \
     with tf.variable_scope(name):
         with tf.name_scope("ShapeOps"):
             # Get input channel count
-            input_ch = inputs.shape[-1]
+            input_ch = inputs.get_shape().as_list()[-1]
             # Number of filters in the bottleneck are reduced by a factor of
             # @projection_rate
             bneck_filters = input_ch // projection_rate
@@ -535,21 +536,21 @@ def block_bottleneck_downsample(inputs, is_training, \
         ############ Main Branch ############
         with tf.variable_scope("DownProject"):
             # Bottleneck projection operation
-            alpha = tf.get_variable(name="Alpha", \
-                                    dtype=tf.float32, \
-                                    initializer=alpha_initializer, \
-                                    shape=[bneck_filters], \
+            alpha = tf.get_variable(name="Alpha",
+                                    dtype=tf.float32,
+                                    initializer=alpha_initializer,
+                                    shape=[bneck_filters],
                                     trainable=True)
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=proj_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=proj_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d(inputs, kern, \
-                               strides=[1,2,2,1], \
-                               padding=padding, \
+            out = tf.nn.conv2d(inputs, kern,
+                               strides=[1,2,2,1],
+                               padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -561,22 +562,22 @@ def block_bottleneck_downsample(inputs, is_training, \
 
         with tf.variable_scope("Conv"):
             # Main convolution operation
-            alpha = tf.get_variable(name="Alpha", \
-                                    dtype=tf.float32, \
-                                    initializer=alpha_initializer, \
-                                    shape=[bneck_filters], \
+            alpha = tf.get_variable(name="Alpha",
+                                    dtype=tf.float32,
+                                    initializer=alpha_initializer,
+                                    shape=[bneck_filters],
                                     trainable=True)
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=conv_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=conv_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d(out, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
-                               dilations=dilations, \
+            out = tf.nn.conv2d(out, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
+                               dilations=dilations,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -588,16 +589,16 @@ def block_bottleneck_downsample(inputs, is_training, \
 
         with tf.variable_scope("Expansion"):
             # Feature expansion operation
-            kern = tf.get_variable(name="Kernel", \
-                                   dtype=tf.float32, \
-                                   initializer=kernel_initializer, \
-                                   shape=exp_kern_shape, \
+            kern = tf.get_variable(name="Kernel",
+                                   dtype=tf.float32,
+                                   initializer=kernel_initializer,
+                                   shape=exp_kern_shape,
                                    trainable=True)
-            out = tf.nn.conv2d(out, kern, \
-                               strides=[1,1,1,1], \
-                               padding=padding, \
+            out = tf.nn.conv2d(out, kern,
+                               strides=[1,1,1,1],
+                               padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training, \
+            out, bn_params = xops.batch_normalization(out, is_training,
                                                        decay=bn_decay)
             variables["Expansion"] = {}
             variables["Expansion"]["Kernel"] = kern
@@ -613,22 +614,22 @@ def block_bottleneck_downsample(inputs, is_training, \
         # BUG: max_pool_with_argmax apparently doesn't support
         #      Targmax=tf.int32
         res_out, max_pool_argmax = \
-            tf.nn.max_pool_with_argmax(inputs, \
-                                       ksize=[1,2,2,1], \
-                                       strides=[1,2,2,1], \
-                                       Targmax=tf.int64, \
-                                       padding=padding, \
+            tf.nn.max_pool_with_argmax(inputs,
+                                       ksize=[1,2,2,1],
+                                       strides=[1,2,2,1],
+                                       Targmax=tf.int64,
+                                       padding=padding,
                                        name="MaxPool")
         # tf.tile() ?
-        res_out = tf.pad(res_out, \
-                         paddings=zero_padding, \
+        res_out = tf.pad(res_out,
+                         paddings=zero_padding,
                          name="ZeroPad")
         #####################################
 
-        alpha = tf.get_variable(name="Alpha", \
-                                shape=[2*input_ch], \
-                                dtype=tf.float32, \
-                                initializer=alpha_initializer, \
+        alpha = tf.get_variable(name="Alpha",
+                                shape=[2*input_ch],
+                                dtype=tf.float32,
+                                initializer=alpha_initializer,
                                 trainable=True)
         # NOTE: out comes from main branch
         out = tf.add(res_out, out, name="Residual")
@@ -639,8 +640,8 @@ def block_bottleneck_downsample(inputs, is_training, \
     return out, variables, max_pool_argmax
 # END def block_bottleneck
 
-def block_final(inputs, num_classes, \
-                kernel_initializer=tf.initializers.glorot_uniform(), \
+def block_final(inputs, num_classes,
+                kernel_initializer=tf.initializers.glorot_uniform(),
                 name="Final"):
     variables = {}
     with tf.variable_scope(name):
@@ -655,13 +656,13 @@ def block_final(inputs, num_classes, \
                                    2*input_shape[2],num_classes])
             kern_shape = [3,3,num_classes,inputs.shape[-1]]
 
-        kern = tf.get_variable(name="Kernel", \
-                               dtype=tf.float32, \
-                               initializer=kernel_initializer, \
-                               shape=kern_shape, \
+        kern = tf.get_variable(name="Kernel",
+                               dtype=tf.float32,
+                               initializer=kernel_initializer,
+                               shape=kern_shape,
                                trainable=True)
-        out = tf.nn.conv2d_transpose(inputs, kern, out_shape, \
-                                     strides=[1,2,2,1], \
+        out = tf.nn.conv2d_transpose(inputs, kern, out_shape,
+                                     strides=[1,2,2,1],
                                      name="Conv2DTranspose")
         variables["Kernel"] = kern
 

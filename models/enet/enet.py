@@ -153,17 +153,17 @@ class ENet(Model):
     def get_vars(self):
         # Recursively walk through parameter dict, and add the leaf nodes to a
         # variable list. NOTE: the dict and hence the list is not ordered.
-        var_list = []
         def dict_iterator(d):
+            var_list = []
             for k in d:
                 if isinstance(d[k], dict):
-                    dict_iterator(d[k])
+                    var_list.extend(dict_iterator(d[k]))
                 elif isinstance(d[k], list):
                     var_list.extend(d[k])
                 elif isinstance(d[k], tf.Variable):
                     var_list.append(d[k])
-        dict_iterator(self.parameters)
-        return var_list
+            return var_list
+        return dict_iterator(self.parameters)
 
     def get_logits(self):
         return self.logits

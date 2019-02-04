@@ -1,0 +1,26 @@
+{
+    "config" : {
+        "epochs"   : 1
+    },
+    "hyperparameters" : {
+        "__doc__" : [
+            "Training hyperparameters"
+        ],
+        "batch_size"          : 4,
+        "learning_rate"       : 1e-4,
+        "learning_rate_decay" : 0.75,
+        "L2_weight"           : 1e-3,
+        "optimizer"           : "Adam"
+    },
+    "network": {
+        "__doc__" : [
+            "Network configuration parameters."
+        ],
+        "input" : {
+            "height"   : 432,
+            "width"    : 640,
+            "channels" : 3
+        },
+        "model" : "ENet"
+    }
+}
