@@ -1,8 +1,52 @@
+import json
+import logging
 import os
 
 import tensorflow as tf
+from google.protobuf.json_format import MessageToJson
 
 __all__ = ["InputStage"]
+
+def _peek_tfrecord(filepath):
+    """
+    Parses the first example from a tfrecord, and returns a dictionary
+    of the first tf.train.Feature
+    :param filepath: path to a tfrecord containing examples
+    :returns: first feature in the record
+    :rtype:   dict
+
+    """
+    example = tf.train.Example()
+    rec_iter = tf.io.tf_record_iterator(filepath)
+    record = next(rec_iter)
+    example.ParseFromString(record)
+    # Convert to json and parse to dict
+    json_msg = MessageToJson(example)
+    features = json.loads(json_msg)
+    # Strip off redundant keys
+    fmt = features["features"]["feature"]
+    # Strip off raw byte data
+    def _strip_byteslists(d):
+        for k in d.keys():
+            if k == "bytesList":
+                del d[k]["value"]
+            elif isinstance(d[k], dict):
+                _strip_byteslists(d[k])
+        return d
+    return _strip_byteslists(fmt)
+
+def _example_from_format(fmt):
+    logger = logging.getLogger(__name__)
+    tf_fmt = {}
+    for k in fmt.keys():
+        _type = str(fmt[k].keys()[0])
+        if _type == "bytesList":
+            tf_fmt[k] = tf.io.FixedLenFeature((), tf.string, "")
+        elif _type == "int64List":
+            tf_fmt[k] = tf.io.FixedLenFeature((), tf.int64 , -1)
+        else:
+            logger.warn("Could not resolve TFRecord format key %s" % _type)
+    return tf_fmt
 
 class InputStage:
     """
@@ -15,8 +59,8 @@ class InputStage:
     and possibly testset, as it is internally assumed that the output
     matches.
     """
-    def __init__(self, record_fmt, batch_size,
-                 input_shape=[512,512,3]):
+    def __init__(self, batch_size,
+                 input_shape=[512,512]):
         """
         Initializes the @InputStage class
 
@@ -25,8 +69,16 @@ class InputStage:
         :param batch_size:  Batch size for the dataset pipeline
         :param input_shape: Input shape of the network
         """
-        self.fmt        = record_fmt
-        self.shape      = input_shape
+        self.logger     = logging.getLogger(__name__)
+
+        if len(input_shape) == 3:
+            self.shape = input_shape
+        elif len(input_shape) == 2:
+            self.shape = input_shape + [None]
+        else:
+            logger.warn("Proceeding with unknown inputshape.")
+            self.shape = [None,None,None]
+
         self.batch_size = batch_size
         self.datasets   = {}
         self.iterator   = None
@@ -53,12 +105,22 @@ class InputStage:
                           parsed example as argument.
         """
         filenames = []
-        if isinstance(path, list):
-            for _dir in path:
-                filenames.append(os.path.join(_dir, "*.tfrecord"))
-        else:
-            filenames = os.path.join(path, "*.tfrecord")
-        parse_fn = lambda x: tf.io.parse_single_example(x, self.fmt,
+        if not isinstance(path, list):
+            path = [path]
+        for _dir in path:
+            filenames.append(os.path.join(_dir, "*.tfrecord"))
+        # Peek into a tfrecord to retrieve format and channel counts
+        fmt = _peek_tfrecord(os.path.join(path[0],os.listdir(path[0])[0]))
+        self.input_depths = {}
+        # Extract channel info for the input data
+        for key in fmt.keys():
+            _key = str(key)
+            scope = "/".join(_key.split("/")[:-1])
+            if _key.endswith("channels"):
+                self.input_depths[scope] = int(fmt[key]["int64List"]["value"][0])
+
+        tf_fmt = _example_from_format(fmt)
+        parse_fn = lambda x: tf.io.parse_single_example(x, tf_fmt,
                                                         name="ParseExample")
         with tf.name_scope("Dataset"):
             with tf.name_scope(name):
@@ -138,24 +200,33 @@ class InputStage:
         :rtype:   tf.Tensor
         """
         images = []
+        channels = 0
         # Iterate over example keys and collect all images not label
-        for key in self.fmt.keys():
+        for key in example:
             if key.endswith("/data"):
-                _type = key.split("/")[0]
-                with tf.name_scope(_type):
+                scope = "/".join(key.split("/")[:-1])
+                with tf.name_scope(scope):
                     image = tf.image.decode_image(example[key],
                                                   dtype=tf.uint8,
                                                   name="DecodeImage")
                 images.append(image)
+                channels += self.input_depths[scope]
+        self.shape[-1] = channels
         # Decode label image
         label = tf.image.decode_png(example["label"], channels=1,
                                     name="DecodeLabel")
         # Stack the images' channels and label image
         image_stack = tf.concat(images+[label], axis=2, name="StackImages")
-        image_stack.set_shape([None,None,3])
+        # Need to recover channel dimension
+        stack_shape = image_stack.shape.as_list()
+        stack_shape[-1] = self.shape[-1]+1
+        image_stack.set_shape(stack_shape)
+
         if not crop_and_split:
             return image_stack
         else:
+            # TODO: move this to a separate function "_default_no_augmentation"
+            # Height and width need not be the same accross samples
             stack_shape = tf.shape(image_stack)
             center = [stack_shape[0]//2, stack_shape[1]//2]
             top_left = [center[0]-self.shape[0]//2,
