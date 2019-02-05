@@ -1,6 +1,8 @@
 # Python standard libraries
 import argparse
 import json
+import logging
+import logging.config
 import os
 import sys
 
@@ -9,34 +11,25 @@ import tensorflow as tf
 
 # User includes
 import models
-from tensortools import InputStage
+from tensortools import InputStage, losses
 
 def main(args):
     # TODO insert train loop and network initialization here
     #      BTW: use tf.train.Saver class to store checkpoints
     # Setup input pipeline
     data_paths = []
-    fmt = {
-        "image/encoding" : tf.io.FixedLenFeature((), tf.string, ""),
-        "image/data"     : tf.io.FixedLenFeature((), tf.string, ""),
-        "image/channels" : tf.io.FixedLenFeature((), tf.int64 , -1),
-        "label"          : tf.io.FixedLenFeature((), tf.string, ""),
-        "height"         : tf.io.FixedLenFeature((), tf.int64 , -1),
-        "width"          : tf.io.FixedLenFeature((), tf.int64 , -1),
-    }
+    classes = 0
     if args["dataset"] == "cityscapes":
+        classes = 19
         data_paths.append(os.path.join(args["data_dir"], "train"))
         if args["coarse"]:
             data_paths.append(os.path.join(args["data_dir"], "train_extra"))
 
     elif args["dataset"] == "freiburg":
+        classes = 6
         data_paths.append(os.path.join(args["data_dir"], "train"))
-        for mod in args["modalities"]:
-            fmt["%s/encoding" % mod] = tf.io.FixedLenFeature((), tf.string, "")
-            fmt["%s/data"     % mod] = tf.io.FixedLenFeature((), tf.string, "")
-            fmt["%s/channels" % mod] = tf.io.FixedLenFeature((), tf.int64 , -1)
 
-    input = InputStage(fmt, args["batch_size"], args["shape"])
+    input = InputStage(args["batch_size"], args["size"])
     input.add_dataset("train", data_paths, epochs=args["epochs"],augment=True)
 
 
@@ -44,21 +37,34 @@ def main(args):
         sess = tf.Session()
         image, label = input.output("train", sess)
 
-        net = models.ENet(3, True)
+        net = models.ENet(classes, True)
         pred, params = net.build(image)
 
+        # Create checkpoint saver object
         saver = tf.train.Saver(var_list=net.get_vars())
+        # Create summary writer object
+        summary_writer = tf.summary.FileWriter(args["log_dir"])
         # TODO setup loss, summaries etc
-
-
-        # TODO remove below
+        loss = losses.masked_softmax_cross_entropy(label,
+                                                   net.get_logits(),
+                                                   classes)
+        summary = tf.summary.scalar("Loss", loss)
+        optimizer = tf.train.AdamOptimizer(args["learning_rate"])
+        train_op = optimizer.minimize(loss)
         sess.run(tf.global_variables_initializer())
-        pred, raw = sess.run([pred, (image, label)])
+        # MAIN training loop
+        while True:
+            try:
+                _, summary_serialized, pred, raw = sess.run([train_op, summary, pred, (image, label)])
+                summary_writer.add_summary(summary_serialized)
+            except tf.errors.OutOfRangeError:
+                break
 
+    # TODO remove below
     import matplotlib.pyplot as plt
     import numpy as np
     for i in range(args["batch_size"]):
-        plt.figure().gca().imshow(np.squeeze(raw[0][i]))
+        plt.figure().gca().imshow(np.squeeze(raw[0][i,:,:,:3]))
         plt.figure().gca().imshow(np.squeeze(raw[1][i]))
         plt.figure().gca().imshow(np.squeeze(pred[i]))
     plt.show()
@@ -125,13 +131,12 @@ def parse_arguments():
         metavar="DECAY",
         help="Learning rate decay factor.")
     opt_parser.add_argument(
-        "-s", "--input-shape",
+        "-s", "--input-size",
         type=int, nargs=3,
-        dest="shape", required=False,
+        dest="size", required=False,
         default=[default["network"]["input"]["height"],
-                 default["network"]["input"]["width"],
-                 default["network"]["input"]["channels"]],
-        help="Network input shape <height width channels>.")
+                 default["network"]["input"]["width"]],
+        help="Network input size <height width>.")
 
 
     # Create parser hierarchy
@@ -175,6 +180,16 @@ def parse_arguments():
     return vars(args)
 
 if __name__ == "__main__":
+    logger = logging.getLogger(__name__)
+    with open("util/logging.json") as conf:
+        conf_dict = json.load(conf)
+        logging.config.dictConfig(conf_dict)
+        del conf_dict
     args = parse_arguments()
+    # Print list of provided arguments
+    logger.info(
+        "Runnig with following parameters:\n%s" %
+        "\n".join(["%-16s : %-s" % (key, value)
+                   for key,value in list(args.items())]))
     exit_code = main(args)
     sys.exit(exit_code)

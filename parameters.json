@@ -18,8 +18,7 @@
         ],
         "input" : {
             "height"   : 432,
-            "width"    : 640,
-            "channels" : 3
+            "width"    : 640
         },
         "model" : "ENet"
     }

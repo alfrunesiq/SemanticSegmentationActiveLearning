@@ -1,4 +1,10 @@
 import tensorflow as tf
+from tensorflow.python.client import device_lib
+
+def _get_available_gpus():
+    local_device_protos = device_lib.list_local_devices()
+    return [dev.name for dev in local_device_protos if dev.device_type == "GPU"]
+
 
 def prelu(x, alpha, name="PReLU"):
     """
@@ -62,11 +68,15 @@ def unpool_2d(inputs,
         # UPDATE: there is a BUG in Tensorflow behaviour, apparently the above
         #         remark only applies to CPU implementation of the op.
         #         https://github.com/tensorflow/tensorflow/pull/23993
-        # NOTE: to run on CPU, comment out next two statements and
-        #       change first argument to idx in scatter_nd
-        batch_range = tf.reshape(tf.range(output_shape[0], dtype=idx.dtype),
-                                 shape=[input_shape[0], 1, 1, 1])*out_img_size
-        idx_sc = idx + batch_range
+        # We're just going to assume that the ops are running on gpu if one is
+        # available
+        if len(_get_available_gpus()) > 0:
+            # scale indeces for GPU bug
+            batch_range = tf.reshape(tf.range(output_shape[0], dtype=idx.dtype),
+                                     shape=[input_shape[0], 1, 1, 1])*out_img_size
+            idx_sc = idx + batch_range
+        else:
+            idx_sc = idx
         idx_sc_ = tf.reshape(idx_sc, [flat_input_size, 1])
         ret = tf.scatter_nd(idx_sc_, inputs_, shape=[flat_out_size])
         # Restore the output shape
