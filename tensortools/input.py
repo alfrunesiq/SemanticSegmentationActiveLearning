@@ -39,7 +39,8 @@ def _example_from_format(fmt):
     logger = logging.getLogger(__name__)
     tf_fmt = {}
     for k in fmt.keys():
-        _type = str(fmt[k].keys()[0])
+        # feature-type is given as the first (and only) key in fmt[k]
+        _type = str(next(iter(fmt[k])))
         if _type == "bytesList":
             tf_fmt[k] = tf.io.FixedLenFeature((), tf.string, "")
         elif _type == "int64List":
@@ -82,7 +83,6 @@ class InputStage:
         self.batch_size = batch_size
         self.datasets   = {}
         self.iterator   = None
-        self._init_ops  = {}
 
     def add_dataset(self, name, path, epochs=1, augment=None, decode_fn=None):
         """
@@ -104,13 +104,15 @@ class InputStage:
                           parsed TFRecord examples. The function takes a
                           parsed example as argument.
         """
+        records_glob = []
         filenames = []
         if not isinstance(path, list):
             path = [path]
         for _dir in path:
-            filenames.append(os.path.join(_dir, "*.tfrecord"))
+            records_glob.append(os.path.join(_dir, "*.tfrecord"))
+            filenames.extend(os.listdir(_dir))
         # Peek into a tfrecord to retrieve format and channel counts
-        fmt = _peek_tfrecord(os.path.join(path[0],os.listdir(path[0])[0]))
+        fmt = _peek_tfrecord(os.path.join(path[0],filenames[0]))
         self.input_depths = {}
         # Extract channel info for the input data
         for key in fmt.keys():
@@ -124,9 +126,9 @@ class InputStage:
                                                         name="ParseExample")
         with tf.name_scope("Dataset"):
             with tf.name_scope(name):
-                # NOTE: tf.data.Dataset.list_files shuffles filenames
-                self.filenames = tf.data.Dataset.list_files(filenames)
-                dataset   = tf.data.TFRecordDataset(self.filenames)
+                # NOTE: tf.data.Dataset.list_files shuffles records_glob
+                self.records_glob = tf.data.Dataset.list_files(records_glob)
+                dataset   = tf.data.TFRecordDataset(self.records_glob)
 
                 if epochs > 1:
                     dataset = dataset.repeat(epochs)
@@ -156,14 +158,19 @@ class InputStage:
                 dataset = dataset.prefetch(self.batch_size)
             # END scope @name
 
-            self.datasets[name] = dataset
+            self.datasets[name] = {}
+            self.datasets[name]["dataset"] = dataset
+            self.datasets[name]["count"]   = len(filenames)
             if self.iterator == None:
                 self.iterator = tf.data.Iterator.from_structure(
                     output_types=dataset.output_types,
                     output_shapes=dataset.output_shapes,
                     output_classes=dataset.output_classes,
                     shared_name="DatasetIterator")
-            self._init_ops[name] = self.iterator.make_initializer(dataset)
+            self.datasets[name]["init"] = \
+                self.iterator.make_initializer(dataset)
+
+        return self.datasets[name]["count"]
         # END scope "Dataset"
 
     def get_datset(self, name):
@@ -174,7 +181,7 @@ class InputStage:
         :returns:    the datset
         :rtype:      tf.data.Dataset
         """
-        return self.datasets[name]
+        return self.datasets[name]["dataset"]
 
     def output(self, name, sess):
         """
@@ -187,7 +194,7 @@ class InputStage:
         :returns: output handle for the dataset iterator
         :rtype:   tf.Tensor
         """
-        sess.run(self._init_ops[name])
+        sess.run(self.datasets[name]["init"])
         return self.iterator.get_next()
 
     def _default_decoder(self, example, crop_and_split=False):

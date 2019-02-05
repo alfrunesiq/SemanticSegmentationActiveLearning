@@ -8,15 +8,20 @@ import sys
 
 # Non-standard includes
 import tensorflow as tf
+# Maybe import tqdm
+show_progress = False
+try:
+    import tqdm
+    show_progress = True
+except ImportError:
+    pass
 
 # User includes
 import models
 from tensortools import InputStage, losses
 
 def main(args):
-    # TODO insert train loop and network initialization here
-    #      BTW: use tf.train.Saver class to store checkpoints
-    # Setup input pipeline
+    # Handle dataset specific paths and number of classes
     data_paths = []
     classes = 0
     if args["dataset"] == "cityscapes":
@@ -29,44 +34,66 @@ def main(args):
         classes = 6
         data_paths.append(os.path.join(args["data_dir"], "train"))
 
+    # Setup input pipeline
     input = InputStage(args["batch_size"], args["size"])
-    input.add_dataset("train", data_paths, epochs=args["epochs"],augment=True)
-
-
+    num_examples = input.add_dataset("train",
+                                     data_paths,
+                                     epochs=args["epochs"],
+                                     augment=True)
     with tf.Session() as sess:
-        sess = tf.Session()
+        # Get input generator
         image, label = input.output("train", sess)
 
+        # Setup network and build Network graph
         net = models.ENet(classes, True)
         pred, params = net.build(image)
 
         # Create checkpoint saver object
-        saver = tf.train.Saver(var_list=net.get_vars())
+        saver   = tf.train.Saver(var_list=net.get_vars())
+        savedir = os.path.join(args["log_dir"], "checkpoints")
+        if not os.path.exists(savedir):
+            os.makedirs(savedir)
+
         # Create summary writer object
-        summary_writer = tf.summary.FileWriter(args["log_dir"])
-        # TODO setup loss, summaries etc
+        summary_writer = tf.summary.FileWriter(args["log_dir"],
+                                               graph=sess.graph)
         loss = losses.masked_softmax_cross_entropy(label,
                                                    net.get_logits(),
                                                    classes)
-        summary = tf.summary.scalar("Loss", loss)
+        # TODO figure out how to deal with summaries
+        summary   = tf.summary.scalar("Loss", loss)
+
         optimizer = tf.train.AdamOptimizer(args["learning_rate"])
-        train_op = optimizer.minimize(loss)
+        train_op  = optimizer.minimize(loss)
+
+        # Create iterator counter to track progress
+        _iter = range(0,num_examples*args["epochs"],args["batch_size"])
+        _iter = _iter if not show_progress \
+                      else tqdm.tqdm(_iter, desc="%-5s" % "train")
+
+        # Initialize variables
+        logger.debug("Initializing Variables")
         sess.run(tf.global_variables_initializer())
-        # MAIN training loop
-        while True:
+        logger.info("Starting training loop...")
+        for _ in _iter:
             try:
-                _, summary_serialized, pred, raw = sess.run([train_op, summary, pred, (image, label)])
-                summary_writer.add_summary(summary_serialized)
+                _, summary_serialized = sess.run([train_op, summary])
             except tf.errors.OutOfRangeError:
-                break
+                pass
+            summary_writer.add_summary(summary_serialized)
+        saver.save(sess, savedir)
+    input.output("train", sess)
+    pred, raw = sess.run([pred, (image, label)])
 
     # TODO remove below
     import matplotlib.pyplot as plt
     import numpy as np
+    fig, axes = plt.subplots()
+
     for i in range(args["batch_size"]):
-        plt.figure().gca().imshow(np.squeeze(raw[0][i,:,:,:3]))
-        plt.figure().gca().imshow(np.squeeze(raw[1][i]))
-        plt.figure().gca().imshow(np.squeeze(pred[i]))
+        plt.figure().gca(title="Image[%d]" % i).imshow(np.squeeze(raw[0][i,:,:,:3]))
+        plt.figure().gca(title="Label[%d]" % i).imshow(np.squeeze(raw[1][i]))
+        plt.figure().gca(title="Pred[%d]" % i).imshow(np.squeeze(np.argmax(pred[i], axis=2)))
     plt.show()
     # TODO Remove downto here
     return 0
