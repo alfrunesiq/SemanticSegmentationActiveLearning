@@ -5,49 +5,31 @@ import os
 import tensorflow as tf
 from google.protobuf.json_format import MessageToJson
 
-__all__ = ["InputStage"]
+__all__ = ["InputStage", "generate_mask"]
 
-def _peek_tfrecord(filepath):
+def generate_mask(labels, mask_index=255):
     """
-    Parses the first example from a tfrecord, and returns a dictionary
-    of the first tf.train.Feature
-    :param filepath: path to a tfrecord containing examples
-    :returns: first feature in the record
-    :rtype:   dict
+    Generates a binary mask that is zero for @labels == @mask_index,
+    and maps the appropriate labels to zero.
 
+    :param labels:     input labels (ground truth)
+    :param mask_index: index to mask out
+    :returns: labels with @mask_index masked to zero, mask
+    :rtype:   tf.Tensor, tf.Tensor
     """
-    example = tf.train.Example()
-    rec_iter = tf.io.tf_record_iterator(filepath)
-    record = next(rec_iter)
-    example.ParseFromString(record)
-    # Convert to json and parse to dict
-    json_msg = MessageToJson(example)
-    features = json.loads(json_msg)
-    # Strip off redundant keys
-    fmt = features["features"]["feature"]
-    # Strip off raw byte data
-    def _strip_byteslists(d):
-        for k in d.keys():
-            if k == "bytesList":
-                del d[k]["value"]
-            elif isinstance(d[k], dict):
-                _strip_byteslists(d[k])
-        return d
-    return _strip_byteslists(fmt)
+    # Make sure labels are 3-dimensional
+    _labels = labels
+    if labels.shape.ndims == 4:
+        _labels = tf.squeeze(_labels, axis=3)
 
-def _example_from_format(fmt):
-    logger = logging.getLogger(__name__)
-    tf_fmt = {}
-    for k in fmt.keys():
-        # feature-type is given as the first (and only) key in fmt[k]
-        _type = str(next(iter(fmt[k])))
-        if _type == "bytesList":
-            tf_fmt[k] = tf.io.FixedLenFeature((), tf.string, "")
-        elif _type == "int64List":
-            tf_fmt[k] = tf.io.FixedLenFeature((), tf.int64 , -1)
-        else:
-            logger.warn("Could not resolve TFRecord format key %s" % _type)
-    return tf_fmt
+    # Create binary mask
+    mask_bool = tf.math.not_equal(labels, mask_index)
+    mask = tf.cast(mask_bool, labels.dtype)
+    # Map masked labels to zero
+    _labels = tf.where(mask_bool, _labels, mask)
+
+    return _labels, mask
+
 
 class InputStage:
     """
@@ -277,3 +259,45 @@ class InputStage:
                                      name="RandomPixelScaling/Clip")
         return image, label
 
+
+def _peek_tfrecord(filepath):
+    """
+    Parses the first example from a tfrecord, and returns a dictionary
+    of the first tf.train.Feature
+    :param filepath: path to a tfrecord containing examples
+    :returns: first feature in the record
+    :rtype:   dict
+
+    """
+    example = tf.train.Example()
+    rec_iter = tf.io.tf_record_iterator(filepath)
+    record = next(rec_iter)
+    example.ParseFromString(record)
+    # Convert to json and parse to dict
+    json_msg = MessageToJson(example)
+    features = json.loads(json_msg)
+    # Strip off redundant keys
+    fmt = features["features"]["feature"]
+    # Strip off raw byte data
+    def _strip_byteslists(d):
+        for k in d.keys():
+            if k == "bytesList":
+                del d[k]["value"]
+            elif isinstance(d[k], dict):
+                _strip_byteslists(d[k])
+        return d
+    return _strip_byteslists(fmt)
+
+def _example_from_format(fmt):
+    logger = logging.getLogger(__name__)
+    tf_fmt = {}
+    for k in fmt.keys():
+        # feature-type is given as the first (and only) key in fmt[k]
+        _type = str(next(iter(fmt[k])))
+        if _type == "bytesList":
+            tf_fmt[k] = tf.io.FixedLenFeature((), tf.string, "")
+        elif _type == "int64List":
+            tf_fmt[k] = tf.io.FixedLenFeature((), tf.int64 , -1)
+        else:
+            logger.warn("Could not resolve TFRecord format key %s" % _type)
+    return tf_fmt
