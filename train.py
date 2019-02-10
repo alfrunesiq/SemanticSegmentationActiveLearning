@@ -18,7 +18,7 @@ except ImportError:
 
 # User includes
 import models
-from tensortools import InputStage, losses
+import tensortools as tt
 
 def main(args):
     # Handle dataset specific paths and number of classes
@@ -35,71 +35,138 @@ def main(args):
         data_paths.append(os.path.join(args["data_dir"], "train"))
 
     # Setup input pipeline
-    input = InputStage(args["batch_size"], args["size"])
-    num_examples = input.add_dataset("train",
-                                     data_paths,
-                                     epochs=args["epochs"],
-                                     augment=True)
-    with tf.Session() as sess:
-        # Get input generator
-        image, label = input.output("train", sess)
+    input_stage = tt.input.InputStage(args["batch_size"], args["size"])
+    # Add training dataset
+    num_batches = input_stage.add_dataset("train",
+                                          data_paths,
+                                          augment=True)
+    # Get iterator output
+    image, label, mask = input_stage.get_output("train")
 
-        # Setup network and build Network graph
-        net = models.ENet(classes, True)
-        pred, params = net.build(image)
+    # Setup network and build Network graph
+    net = models.ENet(classes, True)
+    logits, params = net.build(image)
+    pred = net.get_predictions()
+
+    # Create step variables
+    with tf.variable_scope("StepCounters"):
+        global_step = tf.Variable(0, dtype=tf.int64,
+                                  trainable=False, name="GlobalStep")
+        epoch_step = tf.Variable(0, trainable=False, name="EpochStep")
+        epoch_step_inc = tf.assign_add(epoch_step, 1, name="EpochStepInc")
+
+    # Build cost function
+    with tf.name_scope("Loss"):
+        # Establish loss function
+        loss = tt.losses.masked_softmax_cross_entropy(
+            label, logits, mask, classes, scope="XEntropy")
+
+        # FIXME: insert parameters here:
+        optimizer = tf.train.AdamOptimizer(args["learning_rate"])
+
+        # Make sure to update the metrics when evaluating loss
+        train_op  = optimizer.minimize(loss, global_step=global_step,
+                                       name="TrainOp")
+
+    # Create metric evaluation and summaries
+    train_metrics = tt.metrics.Eval(pred, label, classes, mask)
+    with tf.name_scope("Summary"):
+        metric_summaries = train_metrics.get_summaries()
+        batch_metric_summaries = train_metrics.get_batch_summaries()
+
+        summary_iter = tf.summary.merge(
+            [
+                batch_metric_summaries["Global"],
+                tf.summary.scalar("Loss", loss)
+            ], name="IterationSummaries"
+        )
+        summary_epoch = tf.summary.merge(
+            [
+                metric_summaries["Global"],
+                metric_summaries["Class"],
+                metric_summaries["ConfusionMat"],
+                #TODO: move image summaries to validation thread
+                tf.summary.image("Input", image),
+                tf.summary.image("Label", tf.expand_dims(label, axis=-1)
+                                          * (255//classes)),
+                tf.summary.image(
+                    "Predictions",
+                    tf.expand_dims(
+                        tf.cast(pred, dtype=tf.uint8), axis=-1)
+                    * (255//classes))
+            ], name="EpochSummaries"
+        )
+    metric_update_op = train_metrics.get_metrics_update_op()
+
+    with tf.Session() as sess:
+
+        # Prepare fetches
+        fetches = {}
+        fetches["iteration"] = {
+            "train"   : train_op,
+            "step"    : global_step,
+            "summary" : summary_iter,
+            "metric"  : metric_update_op
+        }
+        fetches["epoch"] = {
+            "summary" : summary_epoch,
+            "step"    : epoch_step_inc
+        }
+
+        # Initialize variables
+        logger.debug("Initializing variables")
+        sess.run(tf.global_variables_initializer())
 
         # Create checkpoint saver object
-        saver   = tf.train.Saver(var_list=net.get_vars())
+        vars_to_store = net.get_vars() + [epoch_step, global_step]
+        saver   = tf.train.Saver(var_list=vars_to_store)
         savedir = os.path.join(args["log_dir"], "checkpoints")
         if not os.path.exists(savedir):
             os.makedirs(savedir)
-
+        elif tf.train.latest_checkpoint(savedir) != None:
+            ckpt = tf.train.latest_checkpoint(savedir)
+            logger.info("Resuming from checkpoint \"%s\"" % ckpt)
+            saver.restore(sess, tf.train.latest_checkpoint(savedir))
         # Create summary writer object
         summary_writer = tf.summary.FileWriter(args["log_dir"],
                                                graph=sess.graph)
-        loss = losses.masked_softmax_cross_entropy(label,
-                                                   net.get_logits(),
-                                                   classes)
-        # TODO figure out how to deal with summaries
-        summary   = tf.summary.scalar("Loss", loss)
-
-        optimizer = tf.train.AdamOptimizer(args["learning_rate"])
-        train_op  = optimizer.minimize(loss)
-
-        # Create iterator counter to track progress
-        _iter = range(0,num_examples*args["epochs"],args["batch_size"])
-        _iter = _iter if not show_progress \
-                      else tqdm.tqdm(_iter, desc="%-5s" % "train")
-
-        # Initialize variables
-        logger.debug("Initializing Variables")
-        sess.run(tf.global_variables_initializer())
+       # run_options  = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+       # run_metadata = tf.RunMetadata()
         logger.info("Starting training loop...")
-        for _ in _iter:
-            try:
-                _, summary_serialized = sess.run([train_op, summary])
-            except tf.errors.OutOfRangeError:
-                pass
-            summary_writer.add_summary(summary_serialized)
-        saver.save(sess, savedir)
-    input.output("train", sess)
-    pred, raw = sess.run([pred, (image, label)])
+        results = {}
+        for epoch in range(1,args["epochs"]+1):
+            # Create iterator counter to track progress
+            _iter = range(0,num_batches)
+            _iter = _iter if not show_progress \
+                          else tqdm.tqdm(_iter, desc="train[%3d/%3d]"
+                                         % (epoch, args["epochs"]))
+            # Initialize input stage
+            input_stage.init_iterator("train", sess)
+            # Reset for another round
+            train_metrics.reset_metrics(sess)
 
-    # TODO remove below
-    import matplotlib.pyplot as plt
-    import numpy as np
-    fig, axes = plt.subplots()
-
-    for i in range(args["batch_size"]):
-        plt.figure().gca(title="Image[%d]" % i).imshow(np.squeeze(raw[0][i,:,:,:3]))
-        plt.figure().gca(title="Label[%d]" % i).imshow(np.squeeze(raw[1][i]))
-        plt.figure().gca(title="Pred[%d]" % i).imshow(np.squeeze(np.argmax(pred[i], axis=2)))
-    plt.show()
-    # TODO Remove downto here
+            for i in _iter:
+                try:
+                    _fetches = {"iteration" : fetches["iteration"]} \
+                               if i < num_batches-1 else fetches
+                    results = sess.run(_fetches
+                    #                    options=run_options,
+                    #                    run_metadata=run_metadata
+                    )
+                except tf.errors.OutOfRangeError:
+                    pass
+                summary_writer.add_summary(results["iteration"]["summary"],
+                                           results["iteration"]["step"])
+                #summary_writer.add_run_metadata(run_metadata, "step=%d" % i)
+            summary_writer.add_summary(results["epoch"]["summary"],
+                                       results["epoch"]["step"])
+            summary_writer.flush()
+            saver.save(sess, savedir)
     return 0
 
+
 class HelpfullParser(argparse.ArgumentParser):
-    # Prints help instead of usage string
+    # Prints help instead of usage string on error
     def error(self, message):
         self.print_help()
         self.exit(2, "error: %s\n" % message)
@@ -159,7 +226,7 @@ def parse_arguments():
         help="Learning rate decay factor.")
     opt_parser.add_argument(
         "-s", "--input-size",
-        type=int, nargs=3,
+        type=int, nargs=2,
         dest="size", required=False,
         default=[default["network"]["input"]["height"],
                  default["network"]["input"]["width"]],
@@ -202,8 +269,12 @@ def parse_arguments():
                           required=False,
                           default=[],
                           help="Path to Freiburg Forest root directory.")
-
+    if not "freiburg" in sys.argv and \
+       not "cityscapes" in sys.argv:
+        top_parser.print_help()
+        sys.exit(0)
     args = top_parser.parse_args()
+
     return vars(args)
 
 if __name__ == "__main__":

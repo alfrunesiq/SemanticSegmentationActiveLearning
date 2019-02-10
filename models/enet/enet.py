@@ -13,7 +13,7 @@ class ENet(Model):
         # Initialize network class members
         self.parameters  = {}
         self.logits      = None
-        self.outputs     = None
+        self.output     = None
 
     def build(self, inputs):
         # Build the graph
@@ -145,9 +145,12 @@ class ENet(Model):
         logits, self.parameters["Fullconv"] = eblk.block_final(logits,
                                                                self.num_classes,
                                                                name="Fullconv")
-        self.logits = logits
-        self.output = tf.nn.softmax(logits, name="Predictions")
-        return self.output, self.parameters
+        with tf.name_scope("Output"):
+            self.pred   = tf.math.argmax(logits, axis=-1, output_type=tf.int32,
+                                         name="Predictions")
+            self.output = tf.nn.softmax(logits, name="Output")
+            self.logits = logits
+        return self.logits, self.parameters
     # END def _build
 
     def get_vars(self):
@@ -170,4 +173,7 @@ class ENet(Model):
 
     def get_output(self):
         return self.output
+
+    def get_predictions(self):
+        return self.pred
 

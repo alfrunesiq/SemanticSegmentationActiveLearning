@@ -1,11 +1,13 @@
 import json
 import logging
+import multiprocessing
 import os
 
 import tensorflow as tf
 from google.protobuf.json_format import MessageToJson
 
-__all__ = ["InputStage", "generate_mask"]
+_CPU_COUNT = multiprocessing.cpu_count()
+del multiprocessing
 
 def generate_mask(labels, mask_index=255):
     """
@@ -17,13 +19,10 @@ def generate_mask(labels, mask_index=255):
     :returns: labels with @mask_index masked to zero, mask
     :rtype:   tf.Tensor, tf.Tensor
     """
-    # Make sure labels are 3-dimensional
-    _labels = labels
-    if labels.shape.ndims == 4:
-        _labels = tf.squeeze(_labels, axis=3)
 
+    _labels = tf.squeeze(labels, axis=-1)
     # Create binary mask
-    mask_bool = tf.math.not_equal(labels, mask_index)
+    mask_bool = tf.math.not_equal(_labels, mask_index)
     mask = tf.cast(mask_bool, labels.dtype)
     # Map masked labels to zero
     _labels = tf.where(mask_bool, _labels, mask)
@@ -53,6 +52,7 @@ class InputStage:
         :param input_shape: Input shape of the network
         """
         self.logger     = logging.getLogger(__name__)
+        self.scope = tf.name_scope("Dataset")
 
         if len(input_shape) == 3:
             self.shape = input_shape
@@ -64,7 +64,6 @@ class InputStage:
 
         self.batch_size = batch_size
         self.datasets   = {}
-        self.iterator   = None
 
     def add_dataset(self, name, path, epochs=1, augment=None, decode_fn=None):
         """
@@ -106,7 +105,7 @@ class InputStage:
         tf_fmt = _example_from_format(fmt)
         parse_fn = lambda x: tf.io.parse_single_example(x, tf_fmt,
                                                         name="ParseExample")
-        with tf.name_scope("Dataset"):
+        with self.scope:
             with tf.name_scope(name):
                 # NOTE: tf.data.Dataset.list_files shuffles records_glob
                 self.records_glob = tf.data.Dataset.list_files(records_glob)
@@ -116,23 +115,29 @@ class InputStage:
                     dataset = dataset.repeat(epochs)
 
                 # Parse TFRecord
-                dataset = dataset.map(parse_fn)
+                dataset = dataset.map(parse_fn,
+                                      num_parallel_calls=_CPU_COUNT-1)
                 # Decode images
                 if decode_fn == None:
                     if augment == None:
                         decoder = lambda x: \
                                   self._default_decoder(x, crop_and_split=True)
-                        dataset = dataset.map(decoder)
+                        dataset = dataset.map(decoder,
+                                              num_parallel_calls=_CPU_COUNT-1)
                     else:
-                        dataset = dataset.map(self._default_decoder)
+                        dataset = dataset.map(self._default_decoder,
+                                              num_parallel_calls=_CPU_COUNT-1)
                 else:
-                    dataset = dataset.map(decode_fn)
+                    dataset = dataset.map(decode_fn,
+                                          num_parallel_calls=_CPU_COUNT-1)
                 # Data augmentation
                 if augment != None:
                     if callable(augment):
-                        dataset = dataset.map(augment)
+                        dataset = dataset.map(augment,
+                                              num_parallel_calls=_CPU_COUNT-1)
                     else:
-                        dataset = dataset.map(self._default_augmentation)
+                        dataset = dataset.map(self._default_augmentation,
+                                              num_parallel_calls=_CPU_COUNT-1)
 
                 # Batch and prefetch image/label data
                 if self.batch_size > 1:
@@ -141,16 +146,17 @@ class InputStage:
             # END scope @name
 
             self.datasets[name] = {}
-            self.datasets[name]["dataset"] = dataset
-            self.datasets[name]["count"]   = len(filenames)
-            if self.iterator == None:
-                self.iterator = tf.data.Iterator.from_structure(
-                    output_types=dataset.output_types,
-                    output_shapes=dataset.output_shapes,
-                    output_classes=dataset.output_classes,
-                    shared_name="DatasetIterator")
-            self.datasets[name]["init"] = \
-                self.iterator.make_initializer(dataset)
+            # Store dataset
+            self.datasets[name]["dataset"]  = dataset
+            # Store number of ticks in the iterator
+            self.datasets[name]["count"]    = \
+                ((len(filenames) - 1) // self.batch_size) + 1
+            # Create [re-]initializable iterator
+            self.datasets[name]["iterator"] = \
+                dataset.make_initializable_iterator()
+            # Create the iterator operator
+            self.datasets[name]["iterator/next"] = \
+                self.datasets[name]["iterator"].get_next()
 
         return self.datasets[name]["count"]
         # END scope "Dataset"
@@ -165,19 +171,25 @@ class InputStage:
         """
         return self.datasets[name]["dataset"]
 
-    def output(self, name, sess):
+    def init_iterator(self, name, sess):
         """
-        Convenience function to [re-] initialize the iterator output and
-        get a handle for the output.
+        Convenience function to initialize the iterator for the dataset
+        referenced by @name.
         NOTE: iterating past the dataset raises tf.errors.OutOfRangeError
         :param name: dataset identifier specified when @add_dataset was
                      called
         :param sess: an active tf.Session to run the initializer
-        :returns: output handle for the dataset iterator
-        :rtype:   tf.Tensor
         """
-        sess.run(self.datasets[name]["init"])
-        return self.iterator.get_next()
+        # Fetch the iterator
+        iterator = self.datasets[name]["iterator"]
+        # Run the initializer
+        sess.run(iterator.initializer)
+
+    def get_output(self, name):
+        """
+        NOTE: need to run initializer
+        """
+        return self.datasets[name]["iterator/next"]
 
     def _default_decoder(self, example, crop_and_split=False):
         """
@@ -225,7 +237,8 @@ class InputStage:
                                                  self.size[0], self.size[1])
             image = crop[:,:,:self.shape[-1]]
             label = crop[:,:,self.shape[-1]:]
-            return image, label
+            label, mask = generate_mask(label)
+            return image, label, mask
 
     def _default_augmentation(self, images):
         """
@@ -257,7 +270,9 @@ class InputStage:
             image = tf.multiply(image, px_scaling, name="RandomPixelScaling")
             image = tf.clip_by_value(image, 0.0, 1.0,
                                      name="RandomPixelScaling/Clip")
-        return image, label
+            # Generate mask
+            label, mask = generate_mask(label)
+        return image, label, mask
 
 
 def _peek_tfrecord(filepath):
@@ -301,3 +316,5 @@ def _example_from_format(fmt):
         else:
             logger.warn("Could not resolve TFRecord format key %s" % _type)
     return tf_fmt
+
+__all__ = ["InputStage", "generate_mask"]
