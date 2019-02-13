@@ -119,14 +119,14 @@ def main(args):
 
         # Create checkpoint saver object
         vars_to_store = net.get_vars() + [epoch_step, global_step]
-        saver   = tf.train.Saver(var_list=vars_to_store)
-        savedir = os.path.join(args["log_dir"], "checkpoints")
+        saver   = tf.train.Saver(var_list=vars_to_store, max_to_keep=50)
+        savedir = os.path.join(args["log_dir"], "model")
         if not os.path.exists(savedir):
             os.makedirs(savedir)
-        elif tf.train.latest_checkpoint(savedir) != None:
-            ckpt = tf.train.latest_checkpoint(savedir)
+        elif tf.train.latest_checkpoint(args["log_dir"]) != None:
+            ckpt = tf.train.latest_checkpoint(args["log_dir"])
             logger.info("Resuming from checkpoint \"%s\"" % ckpt)
-            saver.restore(sess, tf.train.latest_checkpoint(savedir))
+            saver.restore(sess, ckpt)
         # Create summary writer object
         summary_writer = tf.summary.FileWriter(args["log_dir"],
                                                graph=sess.graph)
@@ -161,7 +161,7 @@ def main(args):
             summary_writer.add_summary(results["epoch"]["summary"],
                                        results["epoch"]["step"])
             summary_writer.flush()
-            saver.save(sess, savedir)
+            saver.save(sess, savedir, global_step=results["epoch"]["step"])
     return 0
 
 
