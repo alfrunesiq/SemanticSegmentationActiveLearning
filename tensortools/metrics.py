@@ -14,16 +14,18 @@ class Eval:
             mask_   = tf.reshape(mask       , [-1])
 
             # Create global confusion matrix (should be reset every epoch)
-            self._confusion_mat = tf.get_variable(
-                name="ConfusionMat", shape=[self.nclasses, self.nclasses],
-                initializer=tf.initializers.zeros(), dtype=tf.int64,
-                trainable=False)
+            self._confusion_mat = tf.Variable(
+                tf.zeros(shape=[self.nclasses, self.nclasses],
+                         dtype=tf.int64),
+                name="ConfusionMat", trainable=False)
             batch_confusion_mat = self._intrnl_confusion_mat(
                 labels_, pred_, self.nclasses, weights=mask_,
                 dtype=tf.int32, name="BatchConfusionMat")
             self._confusion_mat_update_op = tf.assign_add(
                 self._confusion_mat, tf.cast(batch_confusion_mat, tf.int64),
                 name="ConfusionMatUpdate")
+            tf.add_to_collection(tf.GraphKeys.UPDATE_OPS,
+                                 self._confusion_mat_update_op)
             self._confusion_mat_reset_op = self._confusion_mat.initializer
             # Create batch and global level metric ops
             # NOTE: confusion_mat gets entry "ConfusionMat" in the returned dict
@@ -46,7 +48,6 @@ class Eval:
         :param name:        name of the scope of the operations
         :returns: Confusion matrix
         :rtype:   tf.Tensor
-
         """
         with tf.name_scope(name):
             _labels      = tf.dtypes.cast(labels, tf.int64)
@@ -64,7 +65,7 @@ class Eval:
             zeros = tf.zeros(shape, dtype=dtype)
         return tf.sparse.add(confusion_mat_sparse, zeros)
 
-    def get_metrics_update_op(self):
+    def get_update_op(self):
         """
         Gets the update op for accumulating the confusion matrix.
         :returns: the tensor output of the update operation

@@ -2,7 +2,7 @@ import tensorflow as tf
 
 from ..util import extra_ops as xops
 
-def block_initial(inputs, is_training,
+def block_initial(inputs, training,
                   padding="SAME",
                   kernel_initializer=tf.initializers.glorot_uniform(),
                   output_width=16,
@@ -66,7 +66,7 @@ def block_initial(inputs, is_training,
     return out, params
 
 def block_bottleneck(inputs,
-                     is_training,
+                     training,
                      padding="SAME",
                      projection_rate=4,
                      dilations=[1,1,1,1],
@@ -113,7 +113,7 @@ def block_bottleneck(inputs,
                +-----------+
 
     :param inputs:          Input tensor.
-    :param is_training:     Whether to accumulate statistics in batch norm and
+    :param training:     Whether to accumulate statistics in batch norm and
                             apply spatial dropout TODO: determine where to put DO.
     :param padding:         Padding for the main convolution.
     :param projection_rate: Bottleneck operates on @projection_rate less channels.
@@ -122,7 +122,7 @@ def block_bottleneck(inputs,
     :param asymmetric:      Use asymmetric (spatially separable) conv.
     :param kernel_initializer: tf.initializer for the conv kernels.
     :param alpha_initializer:  tf.initializer for the PReLU parameters.
-    :param drop_rate:       Dropout probability (is_training=True)
+    :param drop_rate:       Dropout probability (training=True)
     :param name:            Name of the block scope.
     :returns: Output tensor, Parameters
               NOTE: Parameters are stored in a dictionary indexed by the scopes.
@@ -168,7 +168,7 @@ def block_bottleneck(inputs,
                                strides=[1,1,1,1],
                                padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                       decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
             variables["DownProject"] = {}
@@ -219,7 +219,7 @@ def block_bottleneck(inputs,
                                    dilations=dilations,
                                    name="Conv2D")
 
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -240,15 +240,15 @@ def block_bottleneck(inputs,
                                strides=[1,1,1,1],
                                padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
-            if is_training and drop_rate > 0.0:
+            if training and drop_rate > 0.0:
                 out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
             variables["Expansion"] = {}
             variables["Expansion"]["Kernel"] = kern
             variables["Expansion"]["BatchNorm"] = bn_params
             # NOTE: no prelu here
-        # TODO: add spatial dropout here if is_training == True
+        # TODO: add spatial dropout here if training == True
         #####################################
 
         alpha = tf.get_variable(name="Alpha",
@@ -266,7 +266,7 @@ def block_bottleneck(inputs,
 # END def block_bottleneck
 
 
-def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
+def block_bottleneck_upsample(inputs, unpool_argmax, training,
                               padding="SAME",
                               projection_rate=4,
                               dilations=[1,1,1,1],
@@ -311,14 +311,14 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
     :param inputs:          Input tensor.
     :param unpool_argmax:   Switches for the unpool op from the corresponding
                             downsampling max_pool op in the encoder stage.
-    :param is_training:     Whether to accumulate statistics in batch norm.
+    :param training:     Whether to accumulate statistics in batch norm.
     :param padding:         Padding for the main convolution.
     :param projection_rate: Bottleneck operates on @projection_rate less channels.
     :param dilations:       Dilationrates in the main convolution block.
     :param bn_decay:        Decay rate for exp. running mean in batch norm.
     :param kernel_initializer: tf.initializer for the conv kernels.
     :param alpha_initializer:  tf.initializer for the PReLU parameters.
-    :param drop_rate:       Dropout probability (is_training==True)
+    :param drop_rate:       Dropout probability (training==True)
     :param name:            Name of the block scope.
     :returns: Output tensor, Parameters
               NOTE: Parameters are stored in a dictionary indexed by the scopes.
@@ -372,7 +372,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
                                strides=[1,1,1,1],
                                padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -397,7 +397,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
             out = tf.nn.conv2d_transpose(out, kern, conv_out_shape,
                                          strides=[1,2,2,1],
                                          name="Conv2DTranspose")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -418,9 +418,9 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
                                strides=[1,1,1,1],
                                padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
-            if is_training and drop_rate > 0.0:
+            if training and drop_rate > 0.0:
                 out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
             # NOTE: no prelu here
             variables["Expansion"] = {}
@@ -459,7 +459,7 @@ def block_bottleneck_upsample(inputs, unpool_argmax, is_training,
     return out, variables
 # END def block_bottleneck
 
-def block_bottleneck_downsample(inputs, is_training,
+def block_bottleneck_downsample(inputs, training,
                                 padding="SAME",
                                 projection_rate=4,
                                 bn_decay=0.90,
@@ -502,7 +502,7 @@ def block_bottleneck_downsample(inputs, is_training,
                    | -> PReLU  |
                    +-----------+
     :param inputs:          Input tensor.
-    :param is_training:     Whether to accumulate statistics in batch norm and
+    :param training:     Whether to accumulate statistics in batch norm and
                             apply spatial dropout
     :param padding:         Padding for the main convolution.
     :param projection_rate: Bottleneck operates on @projection_rate less channels.
@@ -511,7 +511,7 @@ def block_bottleneck_downsample(inputs, is_training,
     :param kernel_initializer: tf.initializer for the conv kernels.
     :param alpha_initializer:  tf.initializer for the PReLU parameters.
     :param name:            Name of the block scope.
-    :param drop_rate:       Dropout probability (is_training==True)
+    :param drop_rate:       Dropout probability (training==True)
     :returns: operation output, parameters, max pool argmax
     :rtype:   (tf.Tensor, dict, tf.Tensor)
     """
@@ -550,7 +550,7 @@ def block_bottleneck_downsample(inputs, is_training,
                                strides=[1,2,2,1],
                                padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -577,7 +577,7 @@ def block_bottleneck_downsample(inputs, is_training,
                                padding=padding,
                                dilations=dilations,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
             out = xops.prelu(out, alpha, name="PReLU")
 
@@ -598,13 +598,13 @@ def block_bottleneck_downsample(inputs, is_training,
                                strides=[1,1,1,1],
                                padding=padding,
                                name="Conv2D")
-            out, bn_params = xops.batch_normalization(out, is_training,
+            out, bn_params = xops.batch_normalization(out, training,
                                                        decay=bn_decay)
             variables["Expansion"] = {}
             variables["Expansion"]["Kernel"] = kern
             variables["Expansion"]["BatchNorm"] = bn_params
             # NOTE: no prelu here
-            if is_training and drop_rate > 0.0:
+            if training and drop_rate > 0.0:
                 out = xops.spatial_dropout(out, drop_rate, name="SpatialDropout")
             # END scope Expansion
         #####################################

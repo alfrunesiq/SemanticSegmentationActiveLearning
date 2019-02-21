@@ -52,7 +52,7 @@ def unpool_2d(inputs,
     """
     with tf.variable_scope(name):
         with tf.name_scope("ShapeOps"):
-            input_shape     = tf.shape(inputs, out_type=tf.int64)
+            input_shape     = tf.shape(inputs, out_type=tf.int32)
             output_shape    = [input_shape[0], input_shape[1] * strides[1], \
                                input_shape[2] * strides[2], input_shape[3]]
             flat_input_size = tf.reduce_prod(input_shape)
@@ -71,8 +71,10 @@ def unpool_2d(inputs,
         # We're just going to assume that the ops are running on gpu if one is
         # available
         if len(_get_available_gpus()) > 0:
+            if idx.dtype == tf.int64:
+                idx = tf.cast(idx, tf.int32)
             # scale indeces for GPU bug
-            batch_range = tf.reshape(tf.range(output_shape[0], dtype=idx.dtype),
+            batch_range = tf.reshape(tf.range(output_shape[0], dtype=tf.int32),
                                      shape=[input_shape[0], 1, 1, 1])*out_img_size
             idx_sc = idx + batch_range
         else:
@@ -83,7 +85,7 @@ def unpool_2d(inputs,
         ret = tf.reshape(ret, output_shape)
     return ret
 
-def batch_normalization(inputs, is_training=True, decay=0.9):
+def batch_normalization(inputs, training=True, decay=0.9):
     params = {}
     with tf.variable_scope("BatchNorm"):
         with tf.name_scope("ShapeOps"):
@@ -108,12 +110,12 @@ def batch_normalization(inputs, is_training=True, decay=0.9):
                                          trainable=True, \
                                          dtype=tf.float32, \
                                          name="Gamma")
-        if is_training:
+        if training:
             out, batch_mean, batch_var = \
                         tf.nn.fused_batch_norm(inputs, \
                                                scale=params["Gamma"], \
                                                offset=params["Beta"], \
-                                               is_training=is_training)
+                                               is_training=training)
             update_mean = tf.assign_sub(params["Mean"], \
                                         (1-decay)*(params["Mean"]-batch_mean))
             update_var  = tf.assign_sub(params["Variance"], \
@@ -126,7 +128,7 @@ def batch_normalization(inputs, is_training=True, decay=0.9):
                                                offset=params["Beta"], \
                                                mean=params["Mean"], \
                                                variance=params["Variance"], \
-                                               is_training=is_training)
+                                               is_training=training)
     return out, params
 
 def spatial_dropout(inputs, drop_rate, name="SpatialDropout"):

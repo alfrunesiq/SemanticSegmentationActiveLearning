@@ -7,9 +7,9 @@ class ENet(Model):
     """
     https://arxiv.org/pdf/1606.02147.pdf
     """
-    def __init__(self, num_classes, is_training):
+    def __init__(self, num_classes, training):
         self.num_classes = num_classes
-        self.is_training = is_training
+        self.training = training
         # Initialize network class members
         self.parameters  = {}
         self.logits      = None
@@ -18,7 +18,7 @@ class ENet(Model):
     def build(self, inputs):
         # Build the graph
         logits = None
-        is_training = self.is_training
+        training = self.training
         # initialize parameters dict
         self.parameters["Initial"] = {}
         for i in range(9):
@@ -34,123 +34,124 @@ class ENet(Model):
         self.parameters["Fullconv"] = {}
 
         # Below follows specs from Tab. 1 in (Paszke et. al 2016)
-        with tf.variable_scope("Initial"):
+        with tf.variable_scope("Initial", reuse=tf.AUTO_REUSE):
             logits, self.parameters["Initial"] = \
-                    eblk.block_initial(inputs, is_training=is_training)
-        with tf.variable_scope("Stage1"):
+                    eblk.block_initial(inputs, training=training)
+        with tf.variable_scope("Stage1", reuse=tf.AUTO_REUSE):
             logits, self.parameters["Bottleneck1_0"], amax1 = \
                     eblk.block_bottleneck_downsample(logits,
-                                                     is_training=is_training, \
+                                                     training=training, \
                                                      name="Bottleneck1_0")
             logits, self.parameters["Bottleneck1_1"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training, \
+                    eblk.block_bottleneck(logits, training=training, \
                                           name="Bottleneck1_1")
             logits, self.parameters["Bottleneck1_2"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training, \
+                    eblk.block_bottleneck(logits, training=training, \
                                           name="Bottleneck1_2")
             logits, self.parameters["Bottleneck1_3"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training, \
+                    eblk.block_bottleneck(logits, training=training, \
                                           name="Bottleneck1_3")
             logits, self.parameters["Bottleneck1_4"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training, \
+                    eblk.block_bottleneck(logits, training=training, \
                                           name="Bottleneck1_4")
-        with tf.variable_scope("Stage2"):
+        with tf.variable_scope("Stage2", reuse=tf.AUTO_REUSE):
             logits, self.parameters["Bottleneck2_0"], amax2 = \
-                    eblk.block_bottleneck_downsample(logits, is_training=is_training, \
+                    eblk.block_bottleneck_downsample(logits, training=training, \
                                                      name="Bottleneck2_0")
             logits, self.parameters["Bottleneck2_1"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training,
+                    eblk.block_bottleneck(logits, training=training,
                                           name="Bottleneck2_1")
             logits, self.parameters["Bottleneck2_2"] = \
                     eblk.block_bottleneck(logits, dilations=[1,2,2,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck2_2")
             logits, self.parameters["Bottleneck2_3"] = \
                     eblk.block_bottleneck(logits, asymmetric=True,
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck2_3")
             logits, self.parameters["Bottleneck2_4"] = \
                     eblk.block_bottleneck(logits, dilations=[1,4,4,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck2_4")
             logits, self.parameters["Bottleneck2_5"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training,
+                    eblk.block_bottleneck(logits, training=training,
                                           name="Bottleneck2_5")
             logits, self.parameters["Bottleneck2_6"] = \
                     eblk.block_bottleneck(logits, dilations=[1,8,8,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck2_6")
             logits, self.parameters["Bottleneck2_7"] = \
                     eblk.block_bottleneck(logits, asymmetric=True,
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck2_7")
             logits, self.parameters["Bottleneck2_8"] = \
                     eblk.block_bottleneck(logits, dilations=[1,16,16,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck2_8")
 
-        with tf.variable_scope("Stage3"):
+        with tf.variable_scope("Stage3", reuse=tf.AUTO_REUSE):
             logits, self.parameters["Bottleneck3_1"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training,
+                    eblk.block_bottleneck(logits, training=training,
                                           name="Bottleneck3_1")
             logits, self.parameters["Bottleneck3_2"] = \
                     eblk.block_bottleneck(logits, dilations=[1,2,2,1],
-                                          is_training=is_training,
+                                          training=training,
                                            name="Bottleneck3_2")
             logits, self.parameters["Bottleneck3_3"] = \
                     eblk.block_bottleneck(logits, asymmetric=True,
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck3_3")
             logits, self.parameters["Bottleneck3_4"] = \
                     eblk.block_bottleneck(logits, dilations=[1,4,4,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck3_4")
             logits, self.parameters["Bottleneck3_5"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training,
+                    eblk.block_bottleneck(logits, training=training,
                                           name="Bottleneck3_5")
             logits, self.parameters["Bottleneck3_6"] = \
                     eblk.block_bottleneck(logits, dilations=[1,8,8,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck3_6")
             logits, self.parameters["Bottleneck3_7"] = \
                     eblk.block_bottleneck(logits, asymmetric=True,
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck3_7")
             logits, self.parameters["Bottleneck3_8"] = \
                     eblk.block_bottleneck(logits, dilations=[1,16,16,1],
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck3_8")
 
-        with tf.variable_scope("Stage4"):
+        with tf.variable_scope("Stage4", reuse=tf.AUTO_REUSE):
             logits, self.parameters["Bottleneck4_0"] = \
                     eblk.block_bottleneck_upsample(logits, amax2,
-                                                   is_training=is_training,
+                                                   training=training,
                                                    name="Bottleneck4_0")
             logits, self.parameters["Bottleneck4_1"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training,
+                    eblk.block_bottleneck(logits, training=training,
                                           name="Bottleneck4_1")
             logits, self.parameters["Bottleneck4_2"] = \
-                    eblk.block_bottleneck(logits, is_training=is_training,
+                    eblk.block_bottleneck(logits, training=training,
                                           name="Bottleneck4_2")
 
-        with tf.variable_scope("Stage5"):
+        with tf.variable_scope("Stage5", reuse=tf.AUTO_REUSE):
             logits, self.parameters["Bottleneck5_0"] = \
                     eblk.block_bottleneck_upsample(logits, amax1,
-                                                   is_training=is_training,
+                                                   training=training,
                                                    name="Bottleneck5_0")
             logits, self.parameters["Bottleneck5_1"] = \
                     eblk.block_bottleneck(logits,
-                                          is_training=is_training,
+                                          training=training,
                                           name="Bottleneck5_1")
-        logits, self.parameters["Fullconv"] = eblk.block_final(logits,
-                                                               self.num_classes,
-                                                               name="Fullconv")
+
+        with tf.variable_scope("Fullconv", reuse=tf.AUTO_REUSE):
+            logits, self.parameters["Fullconv"] = eblk.block_final(
+                logits, self.num_classes, name="Final")
         with tf.name_scope("Output"):
             self.pred   = tf.math.argmax(logits, axis=-1, output_type=tf.int32,
                                          name="Predictions")
             self.output = tf.nn.softmax(logits, name="Output")
             self.logits = logits
-        return self.logits, self.parameters
+        return self.logits
     # END def _build
 
     def get_vars(self):

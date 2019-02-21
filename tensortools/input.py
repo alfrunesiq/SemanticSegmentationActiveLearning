@@ -52,7 +52,8 @@ class InputStage:
         :param input_shape: Input shape of the network
         """
         self.logger     = logging.getLogger(__name__)
-        self.scope = tf.name_scope("Dataset")
+        self.name_scope = tf.name_scope("Dataset")
+        self.iterator   = None
 
         if len(input_shape) == 3:
             self.shape = input_shape
@@ -85,16 +86,21 @@ class InputStage:
                           parsed TFRecord examples. The function takes a
                           parsed example as argument.
         """
+        # Path glob for records and list of filenames
         records_glob = []
         filenames = []
+        # make sure path is contained in a list
         if not isinstance(path, list):
             path = [path]
+        # Gather list of filenames and glob for all filenames
         for _dir in path:
             records_glob.append(os.path.join(_dir, "*.tfrecord"))
             filenames.extend(os.listdir(_dir))
+
         # Peek into a tfrecord to retrieve format and channel counts
         fmt = _peek_tfrecord(os.path.join(path[0],filenames[0]))
         self.input_depths = {}
+
         # Extract channel info for the input data
         for key in fmt.keys():
             _key = str(key)
@@ -102,19 +108,21 @@ class InputStage:
             if _key.endswith("channels"):
                 self.input_depths[scope] = int(fmt[key]["int64List"]["value"][0])
 
+        # Create format specification from the fmt dictionary
         tf_fmt = _example_from_format(fmt)
-        parse_fn = lambda x: tf.io.parse_single_example(x, tf_fmt,
-                                                        name="ParseExample")
-        with self.scope:
+        # Create parse function for extracting a tf.Example from the record
+        with self.name_scope:
             with tf.name_scope(name):
                 # NOTE: tf.data.Dataset.list_files shuffles records_glob
                 self.records_glob = tf.data.Dataset.list_files(records_glob)
                 dataset   = tf.data.TFRecordDataset(self.records_glob)
 
-                if epochs > 1:
+                if epochs != 0:
                     dataset = dataset.repeat(epochs)
 
                 # Parse TFRecord
+                parse_fn = lambda x: tf.io.parse_single_example(
+                                     x, tf_fmt, name="ParseExample")
                 dataset = dataset.map(parse_fn,
                                       num_parallel_calls=_CPU_COUNT-1)
                 # Decode images
@@ -143,23 +151,26 @@ class InputStage:
                 if self.batch_size > 1:
                     dataset = dataset.batch(self.batch_size)
                 dataset = dataset.prefetch(self.batch_size)
+                self.datasets[name] = {}
+                # Store dataset
+                self.datasets[name]["dataset"]  = dataset
+                # Store number of ticks in the iterator
+                self.datasets[name]["count"]    = \
+                    ((len(filenames) - 1) // self.batch_size) + 1
+                # Create [re-]initializable iterator
+                if self.iterator == None:
+                    self.iterator = tf.data.Iterator.from_structure(
+                        output_types=dataset.output_types,
+                        output_shapes=dataset.output_shapes,
+                        output_classes=dataset.output_classes,
+                        shared_name="DatasetIterator")
+                # Add initialization op for this datset
+                self.datasets[name]["init"] = \
+                    self.iterator.make_initializer(dataset)
             # END scope @name
-
-            self.datasets[name] = {}
-            # Store dataset
-            self.datasets[name]["dataset"]  = dataset
-            # Store number of ticks in the iterator
-            self.datasets[name]["count"]    = \
-                ((len(filenames) - 1) // self.batch_size) + 1
-            # Create [re-]initializable iterator
-            self.datasets[name]["iterator"] = \
-                dataset.make_initializable_iterator()
-            # Create the iterator operator
-            self.datasets[name]["iterator/next"] = \
-                self.datasets[name]["iterator"].get_next()
+        # END scope "Dataset"
 
         return self.datasets[name]["count"]
-        # END scope "Dataset"
 
     def get_datset(self, name):
         """
@@ -181,15 +192,15 @@ class InputStage:
         :param sess: an active tf.Session to run the initializer
         """
         # Fetch the iterator
-        iterator = self.datasets[name]["iterator"]
+        init_op = self.datasets[name]["init"]
         # Run the initializer
-        sess.run(iterator.initializer)
+        sess.run(init_op)
 
-    def get_output(self, name):
+    def get_output(self):
         """
         NOTE: need to run initializer
         """
-        return self.datasets[name]["iterator/next"]
+        return self.iterator.get_next()
 
     def _default_decoder(self, example, crop_and_split=False):
         """
@@ -234,9 +245,14 @@ class InputStage:
                         center[1]-self.shape[1]//2]
             crop = tf.image.crop_to_bounding_box(image_stack,
                                                  top_left[0], top_left[1],
-                                                 self.size[0], self.size[1])
+                                                 self.shape[0], self.shape[1])
+            # retrieve image and label channels from crop
             image = crop[:,:,:self.shape[-1]]
             label = crop[:,:,self.shape[-1]:]
+            # Convert image dtype and normalize
+            image = tf.image.convert_image_dtype(image, tf.float32,
+                                                 name="ToFloat")
+            # Generate mask of valid labels (and squeeze unary 3rd-dim)
             label, mask = generate_mask(label)
             return image, label, mask
 

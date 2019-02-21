@@ -21,82 +21,139 @@ import models
 import tensortools as tt
 
 def main(args):
-    # Handle dataset specific paths and number of classes
-    data_paths = []
+    # Handle dataset specific paths and number of classes and paths to
+    # training and validation set.
+    train_paths = []
+    val_paths   = []
     classes = 0
     if args["dataset"] == "cityscapes":
         classes = 19
-        data_paths.append(os.path.join(args["data_dir"], "train"))
+        train_paths.append(os.path.join(args["data_dir"], "train"))
         if args["coarse"]:
-            data_paths.append(os.path.join(args["data_dir"], "train_extra"))
+            train_paths.append(os.path.join(args["data_dir"], "train_extra"))
+        val_paths.append(os.path.join(args["data_dir"], "val"))
 
     elif args["dataset"] == "freiburg":
         classes = 6
-        data_paths.append(os.path.join(args["data_dir"], "train"))
+        train_paths.append(os.path.join(args["data_dir"], "train"))
+        val_path = os.path.join(args["data_dir"], "val")
+        if os.path.exists(val_path):
+            train_paths.append(val_path)
 
-    # Setup input pipeline
-    input_stage = tt.input.InputStage(args["batch_size"], args["size"])
-    # Add training dataset
-    num_batches = input_stage.add_dataset("train",
-                                          data_paths,
-                                          augment=True)
-    # Get iterator output
-    image, label, mask = input_stage.get_output()
+    with tf.device("/device:CPU:0"):
+        with tf.name_scope("Datasets"):
+            # Setup input pipelines
+            train_input = tt.input.InputStage(args["batch_size"], args["size"])
+            val_input   = tt.input.InputStage(args["batch_size"], args["size"])
 
-    # Setup network and build Network graph
-    net = models.ENet(classes, True)
-    logits = net.build(image)
-    pred = net.get_predictions()
+            # Add datasets
+            num_batches = train_input.add_dataset("train", train_paths,
+                                                  epochs=1, augment=True)
 
-    # Create step variables
-    with tf.variable_scope("StepCounters"):
-        global_step = tf.Variable(0, dtype=tf.int64,
-                                  trainable=False, name="GlobalStep")
-        epoch_step = tf.Variable(0, trainable=False, name="EpochStep")
-        epoch_step_inc = tf.assign_add(epoch_step, 1, name="EpochStepInc")
+            val_input.add_dataset("val", val_paths, epochs=-1)
+            num_val_batches = val_input.add_dataset("val_epoch", val_paths,
+                                                    epochs=1)
+            # Get iterator outputs
+            train_image, train_label, train_mask = train_input.get_output()
+            val_image, val_label, val_mask = val_input.get_output()
+
+        # Create step variables
+        with tf.variable_scope("StepCounters"):
+            global_step = tf.Variable(0, dtype=tf.int64,
+                                      trainable=False, name="GlobalStep")
+            epoch_step = tf.Variable(0, trainable=False, name="EpochStep")
+            epoch_step_inc = tf.assign_add(epoch_step, 1, name="EpochStepInc")
+
+    with tf.name_scope("TrainNet"): #FIXME
+        with tf.device("/device:GPU:0"): #FIXME
+            # Setup network and build Network graph
+            train_net = models.ENet(classes, training=True)
+            train_logits = train_net.build(train_image)
+            train_pred = train_net.get_predictions()
+
+    with tf.name_scope("ValNet"):
+        with tf.device("/device:GPU:1"): #FIXME
+            # Setup network and build Network graph
+            val_net = models.ENet(classes, training=False)
+            val_logits = val_net.build(val_image)
+            val_pred = val_net.get_predictions()
 
     # Build cost function
     with tf.name_scope("Loss"):
-        # Establish loss function
-        loss = tt.losses.masked_softmax_cross_entropy(
-            label, logits, mask, classes, scope="XEntropy")
+        with tf.device("/device:GPU:0"): # FIXME
+            # Establish loss function
+            loss = tt.losses.masked_softmax_cross_entropy(
+                train_label, train_logits, train_mask,
+                classes, scope="XEntropy")
+            # FIXME add regularization here?
+            cost = loss
 
-        # FIXME: insert parameters here:
-        optimizer = tf.train.AdamOptimizer(args["learning_rate"])
+            # FIXME: insert parameters here:
+            optimizer = tf.train.AdamOptimizer(args["learning_rate"])
 
-        # Make sure to update the metrics when evaluating loss
-        train_op  = optimizer.minimize(loss, global_step=global_step,
-                                       name="TrainOp")
+            # Make sure to update the metrics when evaluating loss
+            train_op  = optimizer.minimize(cost, global_step=global_step,
+                                           name="TrainOp")
 
-    # Create metric evaluation and summaries
-    train_metrics = tt.metrics.Eval(pred, label, classes, mask)
+        with tf.device("/device:GPU:1"): # FIXME
+            val_loss = tt.losses.masked_softmax_cross_entropy(
+                val_label, val_logits, val_mask,
+                classes, scope="ValXEntropy")
+
     with tf.name_scope("Summary"):
-        metric_summaries = train_metrics.get_summaries()
-        batch_metric_summaries = train_metrics.get_batch_summaries()
+        # Create metric evaluation and summaries
+        with tf.name_scope("TrainMetrics"):
+            train_metrics = tt.metrics.Eval(train_pred, train_label,
+                                            classes, train_mask)
+            metric_update_op = train_metrics.get_update_op()
+            metric_summaries = train_metrics.get_summaries()
+            batch_metric_summaries = train_metrics.get_batch_summaries()
 
-        summary_iter = tf.summary.merge(
+        train_summary_iter = tf.summary.merge(
             [
                 batch_metric_summaries["Global"],
-                tf.summary.scalar("Loss", loss)
+                tf.summary.scalar("TrainCrossEntropy", loss, family="Losses")
             ], name="IterationSummaries"
         )
-        summary_epoch = tf.summary.merge(
+        train_summary_epoch = tf.summary.merge(
             [
                 metric_summaries["Global"],
                 metric_summaries["Class"],
                 metric_summaries["ConfusionMat"],
                 #TODO: move image summaries to validation thread
-                tf.summary.image("Input", image),
-                tf.summary.image("Label", tf.expand_dims(label, axis=-1)
-                                          * (255//classes)),
+            ], name="EpochSummaries"
+        )
+
+        # Create metric evaluation and summaries
+        with tf.name_scope("ValidationMetrics"):
+            val_metrics = tt.metrics.Eval(val_pred, val_label,
+                                          classes, val_mask)
+            val_metric_update_op = val_metrics.get_update_op()
+            val_metric_summaries = val_metrics.get_summaries()
+            val_batch_metric_summaries = val_metrics.get_batch_summaries()
+
+        val_summary_iter = tf.summary.merge(
+            [
+                val_batch_metric_summaries["Global"],
+                tf.summary.scalar("ValCrosEntropy", val_loss, family="Losses")
+            ], name="IterationSummaries"
+        )
+        val_summary_epoch = tf.summary.merge(
+            [
+                val_metric_summaries["Global"],
+                val_metric_summaries["Class"],
+                val_metric_summaries["ConfusionMat"],
+                #TODO: move image summaries to validation thread
+                tf.summary.image("Input", val_image),
+                tf.summary.image("Label", tf.expand_dims(val_label, axis=-1)
+                                 * (255//classes)),
                 tf.summary.image(
                     "Predictions",
                     tf.expand_dims(
-                        tf.cast(pred, dtype=tf.uint8), axis=-1)
+                        tf.cast(val_pred, dtype=tf.uint8), axis=-1)
                     * (255//classes))
             ], name="EpochSummaries"
         )
-    metric_update_op = train_metrics.get_update_op()
 
     with tf.Session() as sess:
 
@@ -105,11 +162,13 @@ def main(args):
         fetches["iteration"] = {
             "train"   : train_op,
             "step"    : global_step,
-            "summary" : summary_iter,
-            "metric"  : metric_update_op
+            "update"  : tf.group(metric_update_op, val_metric_update_op),
+            "train/summary" : train_summary_iter,
+            "val/summary"   : val_summary_iter
         }
         fetches["epoch"] = {
-            "summary" : summary_epoch,
+            "train/summary" : train_summary_epoch,
+            "val/summary"   : val_summary_epoch,
             "step"    : epoch_step_inc
         }
 
@@ -118,7 +177,7 @@ def main(args):
         sess.run(tf.global_variables_initializer())
 
         # Create checkpoint saver object
-        vars_to_store = net.get_vars() + [epoch_step, global_step]
+        vars_to_store = train_net.get_vars() + [epoch_step, global_step]
         saver   = tf.train.Saver(var_list=vars_to_store, max_to_keep=50)
         savedir = os.path.join(args["log_dir"], "model")
         if not os.path.exists(savedir):
@@ -127,9 +186,14 @@ def main(args):
             ckpt = tf.train.latest_checkpoint(args["log_dir"])
             logger.info("Resuming from checkpoint \"%s\"" % ckpt)
             saver.restore(sess, ckpt)
-        # Create summary writer object
-        summary_writer = tf.summary.FileWriter(args["log_dir"],
-                                               graph=sess.graph)
+
+        # Create summary writer objects
+        summary_dir_train = os.path.join(args["log_dir"], "train")
+        summary_dir_val = os.path.join(args["log_dir"], "val")
+        summary_writer_train = tf.summary.FileWriter(summary_dir_train,
+                                                     graph=sess.graph)
+        summary_writer_val = tf.summary.FileWriter(summary_dir_val)
+
        # run_options  = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
        # run_metadata = tf.RunMetadata()
         logger.info("Starting training loop...")
@@ -141,9 +205,11 @@ def main(args):
                           else tqdm.tqdm(_iter, desc="train[%3d/%3d]"
                                          % (epoch, args["epochs"]))
             # Initialize input stage
-            input_stage.init_iterator("train", sess)
+            train_input.init_iterator("train", sess)
+            val_input.init_iterator("val", sess)
             # Reset for another round
             train_metrics.reset_metrics(sess)
+            val_metrics.reset_metrics(sess)
 
             for i in _iter:
                 try:
@@ -155,12 +221,19 @@ def main(args):
                     )
                 except tf.errors.OutOfRangeError:
                     pass
-                summary_writer.add_summary(results["iteration"]["summary"],
-                                           results["iteration"]["step"])
+                summary_writer_train.add_summary(
+                    results["iteration"]["train/summary"],
+                    results["iteration"]["step"])
+                summary_writer_val.add_summary(
+                    results["iteration"]["val/summary"],
+                    results["iteration"]["step"])
                 #summary_writer.add_run_metadata(run_metadata, "step=%d" % i)
-            summary_writer.add_summary(results["epoch"]["summary"],
-                                       results["epoch"]["step"])
-            summary_writer.flush()
+            summary_writer_train.add_summary(results["epoch"]["train/summary"],
+                                             results["epoch"]["step"])
+            summary_writer_val.add_summary(results["epoch"]["val/summary"],
+                                           results["epoch"]["step"])
+
+            summary_writer_train.flush()
             saver.save(sess, savedir, global_step=results["epoch"]["step"])
     return 0
 
