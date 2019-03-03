@@ -64,27 +64,25 @@ def main(args):
             epoch_step = tf.Variable(0, trainable=False, name="EpochStep")
             epoch_step_inc = tf.assign_add(epoch_step, 1, name="EpochStepInc")
 
-    with tf.name_scope("TrainNet"): #FIXME
-        with tf.device("/device:GPU:0"): #FIXME
-            # Setup network and build Network graph
-            train_net = models.ENet(classes, training=True)
-            train_logits = train_net.build(train_image)
-            train_pred = train_net.get_predictions()
+    # Build training and validation network and get prediction output
+    net = models.ENet(classes)
+    with tf.device("/device:GPU:0"): #FIXME
+        train_logits = net(train_image, training=True)
+        train_pred = tf.math.argmax(train_logits, axis=-1,
+                                    name="TrainPredictions")
 
-    with tf.name_scope("ValNet"):
-        with tf.device("/device:GPU:1"): #FIXME
-            # Setup network and build Network graph
-            val_net = models.ENet(classes, training=False)
-            val_logits = val_net.build(val_image)
-            val_pred = val_net.get_predictions()
+    with tf.device("/device:GPU:1"): #FIXME
+        val_logits = net(val_image, training=False)
+        val_pred = tf.math.argmax(val_logits, axis=-1, name="ValPredictions")
 
     # Build cost function
-    with tf.name_scope("Loss"):
+    with tf.name_scope("Cost"):
         with tf.device("/device:GPU:0"): # FIXME
             # Establish loss function
-            loss = tt.losses.masked_softmax_cross_entropy(
-                train_label, train_logits, train_mask,
-                classes, scope="XEntropy")
+            with tf.control_dependencies(net.updates):
+                loss = tt.losses.masked_softmax_cross_entropy(
+                    train_label, train_logits, train_mask,
+                    classes, scope="XEntropy")
             # FIXME add regularization here?
             cost = loss
 
@@ -177,7 +175,7 @@ def main(args):
         sess.run(tf.global_variables_initializer())
 
         # Create checkpoint saver object
-        vars_to_store = train_net.get_vars() + [epoch_step, global_step]
+        vars_to_store = net.variables + [epoch_step, global_step]
         saver   = tf.train.Saver(var_list=vars_to_store, max_to_keep=50)
         savedir = os.path.join(args["log_dir"], "model")
         if not os.path.exists(savedir):
@@ -188,14 +186,11 @@ def main(args):
             saver.restore(sess, ckpt)
 
         # Create summary writer objects
-        summary_dir_train = os.path.join(args["log_dir"], "train")
-        summary_dir_val = os.path.join(args["log_dir"], "val")
-        summary_writer_train = tf.summary.FileWriter(summary_dir_train,
+        summary_writer = tf.summary.FileWriter(args["log_dir"],
                                                      graph=sess.graph)
-        summary_writer_val = tf.summary.FileWriter(summary_dir_val)
 
-       # run_options  = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-       # run_metadata = tf.RunMetadata()
+        #run_options  = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        #run_metadata = tf.RunMetadata()
         logger.info("Starting training loop...")
         results = {}
         for epoch in range(1,args["epochs"]+1):
@@ -216,24 +211,23 @@ def main(args):
                     _fetches = {"iteration" : fetches["iteration"]} \
                                if i < num_batches-1 else fetches
                     results = sess.run(_fetches
-                    #                    options=run_options,
-                    #                    run_metadata=run_metadata
+                                       # ,options=run_options,
+                                       # run_metadata=run_metadata
                     )
                 except tf.errors.OutOfRangeError:
                     pass
-                summary_writer_train.add_summary(
+                summary_writer.add_summary(
                     results["iteration"]["train/summary"],
                     results["iteration"]["step"])
-                summary_writer_val.add_summary(
+                summary_writer.add_summary(
                     results["iteration"]["val/summary"],
                     results["iteration"]["step"])
                 #summary_writer.add_run_metadata(run_metadata, "step=%d" % i)
-            summary_writer_train.add_summary(results["epoch"]["train/summary"],
-                                             results["epoch"]["step"])
-            summary_writer_val.add_summary(results["epoch"]["val/summary"],
-                                           results["epoch"]["step"])
-
-            summary_writer_train.flush()
+            summary_writer.add_summary(results["epoch"]["train/summary"],
+                                       results["epoch"]["step"])
+            summary_writer.add_summary(results["epoch"]["val/summary"],
+                                       results["epoch"]["step"])
+            summary_writer.flush()
             saver.save(sess, savedir, global_step=results["epoch"]["step"])
     return 0
 

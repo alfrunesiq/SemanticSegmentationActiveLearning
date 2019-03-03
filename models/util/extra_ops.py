@@ -1,9 +1,9 @@
 import tensorflow as tf
-from tensorflow.python.client import device_lib
-
+from tensorflow.python.training import moving_averages
+from tensorflow.python.client   import device_lib
+_LOCAL_DEVICE_PROTOS = device_lib.list_local_devices()
 def _get_available_gpus():
-    local_device_protos = device_lib.list_local_devices()
-    return [dev.name for dev in local_device_protos if dev.device_type == "GPU"]
+    return [dev.name for dev in _LOCAL_DEVICE_PROTOS if dev.device_type == "GPU"]
 
 
 def prelu(x, alpha, name="PReLU"):
@@ -86,6 +86,9 @@ def unpool_2d(inputs,
     return ret
 
 def batch_normalization(inputs, training=True, decay=0.9):
+    """
+    In good Tensorflow spirit this function is DEPRECATED.
+    """
     params = {}
     with tf.variable_scope("BatchNorm"):
         with tf.name_scope("ShapeOps"):
@@ -132,9 +135,51 @@ def batch_normalization(inputs, training=True, decay=0.9):
     return out, params
 
 def spatial_dropout(inputs, drop_rate, name="SpatialDropout"):
-    keep_prob = 1-drop_rate
+    """
+    Applies channelwise spatial (activation) dropout.
+    :param inputs:    input tensor (4D tf.Tensor - NHWC)
+    :param drop_rate: dropout rate
+    :param name:      name of the operation scope
+    :returns: output tensor (same dims as @inputs)
+    :rtype:   tf.Tensor
+    """
     with tf.name_scope(name):
         input_shape = tf.shape(inputs, name="InputShape")
         noise_shape = tf.stack([input_shape[0], 1, 1, input_shape[-1]])
-        out = tf.nn.dropout(inputs, keep_prob, noise_shape, name="Dropout")
+        out = tf.nn.dropout(inputs, noise_shape=noise_shape,
+                            rate=drop_rate, name="Dropout")
     return out
+
+
+def batch_norm(inputs, mean, var, gamma, beta, training=True, decay=0.9):
+    """
+    Wrapper around batch normalization
+    :param inputs:   input tensor (4D tf.Tensor - NHWC)
+    :param mean:     mean variable
+    :param var:      variance variable
+    :param gamma:    scale variable
+    :param beta:     offset variable
+    :param training: whether accumulate mean and compute batch statistics
+    :param decay:    moving average decay parameter
+    :returns: normalized tensor (same dims as @inputs)
+    :rtype: tf.Tensor
+
+    """
+    update_mean = None
+    update_var  = None
+    if training:
+        out, batch_mean, batch_var = tf.nn.fused_batch_norm(
+            inputs, scale=gamma,
+            offset=beta, is_training=training)
+        with tf.name_scope("MovingAverages"):
+            update_mean = moving_averages.assign_moving_average(mean, batch_mean,
+                                                                decay=decay,
+                                                                name="MovingMean")
+            update_var = moving_averages.assign_moving_average(var, batch_var,
+                                                               decay=decay,
+                                                               name="MovingVar")
+    else:
+        out, _, _ = tf.nn.fused_batch_norm(inputs, scale=gamma,
+                                           offset=beta, mean=mean,
+                                           variance=var, is_training=training)
+    return out, update_mean, update_var

@@ -44,9 +44,9 @@ def main(args):
     image, label, mask = input_stage.get_output()
 
     # Setup network and build Network graph
-    net = models.ENet(classes, True)
-    logits = net.build(image)
-    pred = net.get_predictions()
+    net = models.ENet(classes)
+    logits = net(image, True)
+    pred = tf.math.argmax(logits, axis=-1, name="Predictions")
 
     # Create step variables
     with tf.variable_scope("StepCounters"):
@@ -118,7 +118,7 @@ def main(args):
         sess.run(tf.global_variables_initializer())
 
         # Create checkpoint saver object
-        vars_to_store = net.get_vars() + [epoch_step, global_step]
+        vars_to_store = net.variables + [epoch_step, global_step]
         saver   = tf.train.Saver(var_list=vars_to_store, max_to_keep=50)
         savedir = os.path.join(args["log_dir"], "model")
         if not os.path.exists(savedir):
