@@ -52,7 +52,7 @@ class Freiburg:
         """
         # TODO insert docstring here
         _, green, _ = tf.split(label_image, 3, axis=-1)
-        green_int32 = tf.to_int32(green)
+        green_int32 = tf.cast(green, dtype=tf.int32)
         return tf.nn.embedding_lookup(tf_green2trainId, green_int32)
 
     def get_label_mapping(self):

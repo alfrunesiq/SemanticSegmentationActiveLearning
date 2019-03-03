@@ -35,11 +35,11 @@ def masked_softmax_cross_entropy(
             # label weighted by the inverse of it's respective importance
             pred = tf.math.argmax(logits, axis=3, name="Predictions")
             error_mask = tf.cast(tf.math.not_equal(pred, _labels), tf.float32)
-            _mask = tf.to_float(mask)
+            _mask = tf.cast(mask, dtype=tf.float32)
             _mask = _mask*(1 + error_mask*weight)
         else:
             # Create mask to ignore @mask_index labels
-            _mask = tf.to_float(mask)
+            _mask = tf.cast(mask, dtype=tf.float32)
         # Apply label smoothing
         on_value  = 1.0 - label_smoothing
         off_value = label_smoothing / (num_classes - 1.0)
@@ -51,7 +51,7 @@ def masked_softmax_cross_entropy(
                                name="LabelsOneHot")
         _labels = tf.stop_gradient(_labels)
         loss = tf.nn.softmax_cross_entropy_with_logits_v2(
-            labels=_labels, logits=logits, dim=-1, name="SoftmaxCrossEntropy")
+            labels=_labels, logits=logits, axis=-1, name="SoftmaxCrossEntropy")
         # Apply mask / weighting
         loss = tf.math.multiply(loss, _mask)
         # Do the mean in two takes: first in batch dimension,

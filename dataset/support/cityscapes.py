@@ -129,7 +129,7 @@ class Cityscapes:
         :returns: The converted image as a tensorflow tensor.
         :rtype:   tf.Tensor
         """
-        labels_int32 = tf.to_int32(label_image)
+        labels_int32 = tf.cast(label_image, dtype=tf.int32)
         return tf.nn.embedding_lookup(id2trainId_tf, labels_int32)
     def get_label_mapping(self):
         return np.array(id2trainId, dtype=np.uint8)
