@@ -38,16 +38,16 @@ def _int64_feature(value):
 def main(args):
     helper = None
 
-    if args.dataset[0].lower() == "cityscapes":
+    if args.dataset.lower() == "cityscapes":
         use_coarse = True if args.extra is not None and \
                              "coarse" in args.extra[0].lower() \
                      else False
         helper = support.Cityscapes(use_coarse)
-    elif args.dataset[0].lower() == "freiburg":
+    elif args.dataset.lower() == "freiburg":
         modalities = None if args.extra is None else args.extra
         helper = support.Freiburg(modalities)
     else:
-        raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
+        raise ValueError("Invalid argument \"dataset\": %s" % args.dataset)
 
     ################ Build Tensorflow Graph ##################
     input_filename = tf.placeholder(dtype=tf.string)
@@ -55,32 +55,47 @@ def main(args):
     # Seperate heads for decoding png or jpg
     jpg_decoding = tf.image.decode_jpeg(file_contents)
     png_decoding = tf.image.decode_png(file_contents)
-    # Remapping of labels (can only be png)
-    labels_mapped   = helper.label_mapping(png_decoding)
-    labels_encoding = tf.image.encode_png(labels_mapped)
     # Get the shape of image / labels to assert them equal
     png_image_shape = tf.shape(png_decoding)
     jpg_image_shape = tf.shape(jpg_decoding)
+    if args.scale_factor > 1:
+        scale_factors_png = tf.stack([args.scale_factor, args.scale_factor, 1])
+        scale_factors_jpg = tf.stack([args.scale_factor, args.scale_factor, 1])
+        png_image_shape = png_image_shape // scale_factors_png
+        jpg_image_shape = jpg_image_shape // scale_factors_jpg
+        png_decoding = tf.image.resize(
+            tf.expand_dims(png_decoding, axis=0), png_image_shape[:-1],
+            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        jpg_decoding = tf.image.resize(
+            tf.expand_dims(jpg_decoding, axis=0), jpg_image_shape[:-1],
+            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        png_decoding = tf.squeeze(png_decoding, axis=0)
+        jpg_decoding = tf.squeeze(jpg_decoding, axis=0)
+    png_encoding = tf.image.encode_png(png_decoding)
+    jpt_encoding = tf.image.encode_jpeg(jpg_decoding)
+    # Remapping of labels (can only be png)
+    labels_mapped   = helper.label_mapping(png_decoding)
+    labels_encoding = tf.image.encode_png(labels_mapped)
     # In order to convert tiff to png
-    input_image = tf.placeholder(tf.uint8, shape=[None,None,None])
-    png_encoding = tf.image.encode_png(input_image)
+    tif_input_image = tf.placeholder(tf.uint8, shape=[None,None,None])
+    tif_png_encoding = tf.image.encode_png(tif_input_image)
     ##########################################################
 
-    if os.path.exists(args.data_dir[0]):
-        dataset_paths = helper.file_associations(args.data_dir[0])
+    if os.path.exists(args.data_dir):
+        dataset_paths = helper.file_associations(args.data_dir)
     else:
-        raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir[0])
+        raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir)
 
-    if not os.path.exists(args.output_dir[0]):
+    if not os.path.exists(args.output_dir):
         sys.stdout.write("Directory \"%s\" does not exist. "
-                         % args.output_dir[0])
+                         % args.output_dir)
         sys.stdout.write("Do you want to create it? [y/N] ")
         sys.stdout.flush()
         user_input = sys.stdin.read(1)
         if user_input.lower()[0] != "y":
             sys.exit(0)
         else:
-            os.makedirs(args.output_dir[0])
+            os.makedirs(args.output_dir)
 
     # Create session on CPU
     config = tf.ConfigProto()
@@ -89,7 +104,7 @@ def main(args):
     # Write records for each split
     for split in dataset_paths.keys():
         # Create directory for the split
-        split_path = os.path.join(args.output_dir[0], split)
+        split_path = os.path.join(args.output_dir, split)
         if not os.path.exists(split_path):
             os.mkdir(split_path)
         # Progress bar
@@ -123,12 +138,12 @@ def main(args):
                     # Handle the different file extensions separately
                     if ext == "png":
                         image, shape = sess.run(
-                            fetches=[file_contents, png_image_shape],
+                            fetches=[png_encoding, png_image_shape],
                             feed_dict={input_filename: path})
                     elif ext == "jpg" or ext == "jpeg":
                         ext = "jpg"
                         image, shape = sess.run(
-                            fetches=[file_contents, jpg_image_shape],
+                            fetches=[jpg_encoding, jpg_image_shape],
                             feed_dict={input_filename: path})
                     elif ext == "tif" or ext == "tiff":
                         # read image and convert to png
@@ -141,8 +156,8 @@ def main(args):
                             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                         elif len(shape) == 2:
                             image = np.expand_dims(image, axis=-1)
-                        image = sess.run(png_encoding,
-                                         feed_dict={input_image: image})
+                        image = sess.run(tif_png_encoding,
+                                         feed_dict={tif_input_image: image})
                     else:
                         raise ValueError(
                             "Unsupported image format \"%s\"" % ext)
@@ -176,7 +191,7 @@ def main(args):
                 f.write(tf_example.SerializeToString())
     # Write feature keys in order to dynamically being able to reconstruct the
     # content of the records when reading the records.
-    meta_file = os.path.join(args.output_dir[0], "meta.txt")
+    meta_file = os.path.join(args.output_dir, "meta.txt")
     with open(meta_file, "w") as f:
         f.write("\n".join(features.keys()))
     # In order to reconstruct:
@@ -201,24 +216,27 @@ def main(args):
 if __name__ == "__main__":
     # Setup commandline arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--data_root", \
-                        type=str, \
-                        nargs=1, \
-                        dest="data_dir", \
-                        required=True, \
+    parser.add_argument("-d", "--data_root",
+                        type=str,
+                        dest="data_dir",
+                        required=True,
                         help="Path to data set root directory.")
-    parser.add_argument("-t", "--dataset", \
-                        type=str, \
-                        nargs=1, \
-                        dest="dataset", \
-                        required=True, \
+    parser.add_argument("-t", "--dataset",
+                        type=str,
+                        dest="dataset",
+                        required=True,
                         help="Name of the dataset {cityscapes,freiburg,kitti}.")
-    parser.add_argument("-o", "--output_dir", \
-                        type=str, \
-                        nargs=1, \
-                        dest="output_dir", \
-                        required=True, \
+    parser.add_argument("-o", "--output_dir",
+                        type=str,
+                        dest="output_dir",
+                        required=True,
                         help="Path to where to store the records.")
+    parser.add_argument("-s", "--scale",
+                        type=int,
+                        default=1,
+                        dest="scale_factor",
+                        required=False,
+                        help="Downscaling factor.")
     # TODO: make this a little nicer
     parser.add_argument(
         "-e", "--extra", type=str, nargs="*",

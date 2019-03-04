@@ -9,6 +9,7 @@ import sys
 import multiprocessing
 
 import argparse
+from functools import partial
 
 import numpy as np
 import tensorflow as tf
@@ -60,7 +61,7 @@ def proc_initializer(args, path):
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
 
-def process_image(path):
+def process_image(path, scale=1):
     ext = path.split(".")[-1]
     # return image, shape, ext
     encoding  = tf.io.read_file(path)
@@ -77,14 +78,26 @@ def process_image(path):
             decoding = cv2.cvtColor(cv2.COLOR_BGR2RGB)
         elif len(decoding.shape) == 2:
             decoding = np.expand_dims(decoding, axis=-1)
-        encoding = tf.image.encode_png(decoding)
+        if scale == 1:
+            encoding = tf.image.encode_png(decoding)
     else:
         raise ValueError(
             "Unsupported image format \"%s\"" % ext)
     shape = np.array(decoding.shape)
+    if scale > 1:
+        # Downsample by scale factor
+        shape = shape / [scale, scale, 1]
+        decoding = tf.image.resize_nearest_neighbor(
+            tf.exand_dims(decoding, axis=0), shape[:-1])
+        decoding = tf.squeeze(decoding, axis=0)
+        # update encoding
+        if ext == "png" or ext == "tif":
+            encoding = tf.image.encode_png(decoding)
+        elif ext == "jpg":
+            encoding = tf.image.encode_png(decoding)
     return encoding, shape, ext
 
-def record_example(example):
+def record_example(example, scale):
     # example = [str(ID), dict({str(type): str(path)})]
     features = {}
     shapes   = []
@@ -184,12 +197,13 @@ def main(args):
             p = multiprocessing.Pool(initializer=proc_initializer, initargs=[args, split_path])
             # Progress bar
             examples = list(dataset_paths[split].items())
+            _record_example = partial(record_example, scale=args.scale_factor)
             if show_progress:
                 example_iter = tqdm(
-                    p.imap_unordered(record_example,examples),
+                    p.imap_unordered(_record_example, examples),
                     total=len(examples), desc="%-7s" % split).__iter__()
             else:
-                example_iter = p.imap_unordered(examples)
+                example_iter = p.imap_unordered(_record_example, examples)
             # retrieve a single prototype feature
             features = next(example_iter)
             # multiprocess the rest
@@ -242,6 +256,12 @@ if __name__ == "__main__":
                         dest="output_dir", \
                         required=True, \
                         help="Path to where to store the records.")
+    parser.add_argument("-s", "--scale",
+                        type=int,
+                        default=1,
+                        dest="scale_factor",
+                        required=False,
+                        help="Downscaling factor.")
     # TODO: make this a little nicer
     parser.add_argument(
         "-e", "--extra", type=str, nargs="*",

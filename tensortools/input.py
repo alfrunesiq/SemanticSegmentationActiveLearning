@@ -293,17 +293,19 @@ class InputStage:
 
 def _peek_tfrecord(filepath):
     """
-    Parses the first example from a tfrecord, and returns a dictionary
-    of the first tf.train.Feature
+    Parses a single example tfrecord, and returns a dictionary of the
+    first tf.train.Feature
+    WARNING tfrecord format and TFRecordWriter may change in future
+            Tensorflow releases
     :param filepath: path to a tfrecord containing examples
     :returns: first feature in the record
     :rtype:   dict
-
     """
     example = tf.train.Example()
-    rec_iter = tf.io.tf_record_iterator(filepath)
-    record = next(rec_iter)
-    example.ParseFromString(record)
+    with open(filepath, "rb") as f:
+        record = f.read()[12:-4] # NOTE strip symbols added by TFRecordWriter
+        example.ParseFromString(record)
+        del record
     # Convert to json and parse to dict
     json_msg = MessageToJson(example)
     features = json.loads(json_msg)
