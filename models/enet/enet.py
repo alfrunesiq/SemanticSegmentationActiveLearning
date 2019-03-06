@@ -7,136 +7,144 @@ class ENet(Model):
     """
     https://arxiv.org/pdf/1606.02147.pdf
     """
-    def __init__(self, classes, name="ENet"):
+    def __init__(self, classes,
+                 weight_regularization=None, # tf.keras.regularizers.l2(2e-4),
+                 name="ENet"):
         """
-
-        :param classes: number of output classes
+        :param weight_regularization: weight parameter regularization
+        :param classes:               number of output classes
+        :param name:                  name of model scope
         """
 
         self.classes = classes
         super(ENet, self).__init__(name=name)
 
+        self.weight_regularization = tf.keras.regularizers.get(
+            weight_regularization)
+
         # Define all layers as in the paper
         self.Initial = mod.Initial(16)
 
         # Stage 1
-        self.Bottleneck1_0 = mod.BottleneckDownsample(64, name="Bottleneck1_0",
-                                                      drop_rate=0.01)
-        self.Bottleneck1_1 = mod.Bottleneck(64, name="Bottleneck1_1",
-                                            drop_rate=0.01)
-        self.Bottleneck1_2 = mod.Bottleneck(64, name="Bottleneck1_2",
-                                            drop_rate=0.01)
-        self.Bottleneck1_3 = mod.Bottleneck(64, name="Bottleneck1_3",
-                                            drop_rate=0.01)
-        self.Bottleneck1_4 = mod.Bottleneck(64, name="Bottleneck1_4",
-                                            drop_rate=0.01)
+        self.Bottleneck1_0 = mod.BottleneckDownsample(
+            64, name="Bottleneck1_0",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.01)
+        self.Bottleneck1_1 = mod.Bottleneck(
+            64, name="Bottleneck1_1",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.01)
+        self.Bottleneck1_2 = mod.Bottleneck(
+            64, name="Bottleneck1_2",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.01)
+        self.Bottleneck1_3 = mod.Bottleneck(
+            64, name="Bottleneck1_3",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.01)
+        self.Bottleneck1_4 = mod.Bottleneck(
+            64, name="Bottleneck1_4",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.01)
 
         # Stage 2
-        self.Bottleneck2_0 = mod.BottleneckDownsample(128, name="Bottleneck2_0",
-                                                      drop_rate=0.1)
-        self.Bottleneck2_1 = mod.Bottleneck(128, name="Bottleneck2_1")
-        self.Bottleneck2_2 = mod.Bottleneck(128, name="Bottleneck2_2",
-                                            drop_rate=0.1,
-                                            dilation_rate=(2,2))
-        self.Bottleneck2_3 = mod.Bottleneck(128, name="Bottleneck2_3",
-                                            drop_rate=0.1,
-                                            asymmetric=True,
-                                            kernel_size=(5,5))
-        self.Bottleneck2_4 = mod.Bottleneck(128, name="Bottleneck2_4",
-                                            drop_rate=0.1,
-                                            dilation_rate=(4,4))
-        self.Bottleneck2_5 = mod.Bottleneck(128, name="Bottleneck2_5",
-                                            drop_rate=0.1)
-        self.Bottleneck2_6 = mod.Bottleneck(128, name="Bottleneck2_6",
-                                            drop_rate=0.1,
-                                            dilation_rate=(8,8))
-        self.Bottleneck2_7 = mod.Bottleneck(128, name="Bottleneck2_7",
-                                            drop_rate=0.1,
-                                            asymmetric=True,
-                                            kernel_size=(5,5))
-        self.Bottleneck2_8 = mod.Bottleneck(128, name="Bottleneck2_8",
-                                            drop_rate=0.1,
-                                            dilation_rate=(8,8))
+        self.Bottleneck2_0 = mod.BottleneckDownsample(
+            128, name="Bottleneck2_0",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_1 = mod.Bottleneck(
+            128, name="Bottleneck2_1",
+            kernel_regularizer=self.weight_regularization)
+        self.Bottleneck2_2 = mod.Bottleneck(
+            128, name="Bottleneck2_2", dilation_rate=(2,2),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_3 = mod.Bottleneck(
+            128, name="Bottleneck2_3", asymmetric=True, kernel_size=(5,5),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_4 = mod.Bottleneck(
+            128, name="Bottleneck2_4", dilation_rate=(4,4),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_5 = mod.Bottleneck(
+            128, name="Bottleneck2_5",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_6 = mod.Bottleneck(
+            128, name="Bottleneck2_6", dilation_rate=(8,8),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_7 = mod.Bottleneck(
+            128, name="Bottleneck2_7", asymmetric=True, kernel_size=(5,5),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck2_8 = mod.Bottleneck(
+            128, name="Bottleneck2_8", dilation_rate=(16,16),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
 
         # Stage 3
-        self.Bottleneck3_1 = mod.Bottleneck(128, name="Bottleneck3_1",
-                                            drop_rate=0.1)
-        self.Bottleneck3_2 = mod.Bottleneck(128, name="Bottleneck3_2",
-                                            drop_rate=0.1,
-                                            dilation_rate=(2,2))
-        self.Bottleneck3_3 = mod.Bottleneck(128, name="Bottleneck3_3",
-                                            drop_rate=0.1,
-                                            asymmetric=True,
-                                            kernel_size=(5,5))
-        self.Bottleneck3_4 = mod.Bottleneck(128, name="Bottleneck3_4",
-                                            drop_rate=0.1,
-                                            dilation_rate=(4,4))
-        self.Bottleneck3_5 = mod.Bottleneck(128, name="Bottleneck3_5",
-                                            drop_rate=0.1)
-        self.Bottleneck3_6 = mod.Bottleneck(128, name="Bottleneck3_6",
-                                            drop_rate=0.1,
-                                            dilation_rate=(8,8))
-        self.Bottleneck3_7 = mod.Bottleneck(128, name="Bottleneck3_7",
-                                            drop_rate=0.1,
-                                            asymmetric=True,
-                                            kernel_size=(5,5))
-        self.Bottleneck3_8 = mod.Bottleneck(128, name="Bottleneck3_8",
-                                            drop_rate=0.1,
-                                            dilation_rate=(8,8))
+        self.Bottleneck3_1 = mod.Bottleneck(
+            128, name="Bottleneck3_1",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_2 = mod.Bottleneck(
+            128, name="Bottleneck3_2", dilation_rate=(2,2),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_3 = mod.Bottleneck(
+            128, name="Bottleneck3_3", asymmetric=True, kernel_size=(5,5),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_4 = mod.Bottleneck(
+            128, name="Bottleneck3_4", dilation_rate=(4,4),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_5 = mod.Bottleneck(
+            128, name="Bottleneck3_5",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_6 = mod.Bottleneck(
+            128, name="Bottleneck3_6", dilation_rate=(8,8),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_7 = mod.Bottleneck(
+            128, name="Bottleneck3_7", asymmetric=True, kernel_size=(5,5),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck3_8 = mod.Bottleneck(
+            128, name="Bottleneck3_8", dilation_rate=(16,16),
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
 
         # Stage 4
-        self.Bottleneck4_0 = mod.BottleneckUpsample(64, name="Bottleneck4_0",
-                                                    drop_rate=0.1)
-        self.Bottleneck4_1 = mod.Bottleneck(64, name="Bottleneck4_1",
-                                            drop_rate=0.1)
-        self.Bottleneck4_2 = mod.Bottleneck(64, name="Bottleneck4_2",
-                                            drop_rate=0.1)
+        self.Bottleneck4_0 = mod.BottleneckUpsample(
+            64, name="Bottleneck4_0",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck4_1 = mod.Bottleneck(
+            64, name="Bottleneck4_1",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck4_2 = mod.Bottleneck(
+            64, name="Bottleneck4_2",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
 
         # Stage 5
-        self.Bottleneck5_0 = mod.BottleneckUpsample(16, name="Bottleneck5_0",
-                                                    drop_rate=0.1)
-        self.Bottleneck5_1 = mod.Bottleneck(16, name="Bottleneck5_1",
-                                            drop_rate=0.1)
+        self.Bottleneck5_0 = mod.BottleneckUpsample(
+            16, name="Bottleneck5_0",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
+        self.Bottleneck5_1 = mod.Bottleneck(
+            16, name="Bottleneck5_1",
+            kernel_regularizer=self.weight_regularization,
+            drop_rate=0.1)
 
         # Final UpConv
-        self.Final = mod.Final(self.classes)
-
-        # Output lists
-        self.initial = []
-
-        self.bottleneck1_0 = []
-        self.bottleneck1_1 = []
-        self.bottleneck1_2 = []
-        self.bottleneck1_3 = []
-        self.bottleneck1_4 = []
-
-        self.bottleneck2_0 = []
-        self.bottleneck2_1 = []
-        self.bottleneck2_2 = []
-        self.bottleneck2_3 = []
-        self.bottleneck2_4 = []
-        self.bottleneck2_5 = []
-        self.bottleneck2_6 = []
-        self.bottleneck2_7 = []
-        self.bottleneck2_8 = []
-
-        self.bottleneck3_1 = []
-        self.bottleneck3_2 = []
-        self.bottleneck3_3 = []
-        self.bottleneck3_4 = []
-        self.bottleneck3_5 = []
-        self.bottleneck3_6 = []
-        self.bottleneck3_7 = []
-        self.bottleneck3_8 = []
-
-        self.bottleneck4_0 = []
-        self.bottleneck4_1 = []
-        self.bottleneck4_2 = []
-
-        self.bottleneck5_0 = []
-        self.bottleneck5_1 = []
-
-        self.final = []
+        self.Final = mod.Final(self.classes,
+                               kernel_regularizer=self.weight_regularization)
 
     def build(self, input_shape):
         """
@@ -156,6 +164,48 @@ class ENet(Model):
             self._stage4_scope = scope
         with tf.name_scope("Stage5") as scope:
             self._stage5_scope = scope
+
+        try:
+            # Temporarily disable checkpointable attr tracking
+            self._setattr_tracking = False
+            # Initialize output lists
+            self.initial = []
+
+            self.bottleneck1_0 = []
+            self.bottleneck1_1 = []
+            self.bottleneck1_2 = []
+            self.bottleneck1_3 = []
+            self.bottleneck1_4 = []
+
+            self.bottleneck2_0 = []
+            self.bottleneck2_1 = []
+            self.bottleneck2_2 = []
+            self.bottleneck2_3 = []
+            self.bottleneck2_4 = []
+            self.bottleneck2_5 = []
+            self.bottleneck2_6 = []
+            self.bottleneck2_7 = []
+            self.bottleneck2_8 = []
+
+            self.bottleneck3_1 = []
+            self.bottleneck3_2 = []
+            self.bottleneck3_3 = []
+            self.bottleneck3_4 = []
+            self.bottleneck3_5 = []
+            self.bottleneck3_6 = []
+            self.bottleneck3_7 = []
+            self.bottleneck3_8 = []
+
+            self.bottleneck4_0 = []
+            self.bottleneck4_1 = []
+            self.bottleneck4_2 = []
+
+            self.bottleneck5_0 = []
+            self.bottleneck5_1 = []
+
+            self.final = []
+        finally:
+            self._setattr_tracking = True
         self.built = True
 
     def call(self, inputs, training):

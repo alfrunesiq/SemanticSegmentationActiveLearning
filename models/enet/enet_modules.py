@@ -79,62 +79,64 @@ class Initial(Layer):
             self._conv_scope = scope
         with tf.name_scope("Residual") as scope:
             self._res_scope = scope
+
         # Compute shapes
         input_channels  = int(input_shape[-1])
         filters = self.output_channels - input_channels
         kernel_shape    = self.kernel_size + (input_channels, filters)
-        # Create weights
-        with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
-            self.kernel = self.add_weight(
-                name="Kernel",
-                dtype=tf.float32,
-                shape=kernel_shape,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-        # Batch normalization parameters
-        with tf.variable_scope(self._conv_scope+"BatchNorm/",
-                               reuse=tf.AUTO_REUSE):
-            # NOTE: moving average statistics during training
-            self.mean = self.add_weight(
-                name="Mean",
-                shape=[self.output_channels],
-                dtype=tf.float32,
-                initializer=tf.zeros_initializer(),
-                trainable=False
-               )
-            self.variance = self.add_weight(
-                name="Variance",
-                shape=[self.output_channels],
-                dtype=tf.float32,
-                initializer=tf.ones_initializer(),
-                trainable=False
-               )
-            # Trainable batch_norm parameters
-            self.gamma = self.add_weight(
-                name="Gamma",
-                shape=[self.output_channels],
-                dtype=tf.float32,
-                initializer=tf.ones_initializer(),
-                trainable=True
-               )
-            self.beta = self.add_weight(
-                name="Beta",
-                shape=[self.output_channels],
-                dtype=tf.float32,
-                initializer=tf.zeros_initializer(),
-                trainable=True
-               )
 
-        with tf.variable_scope(self._res_scope, reuse=tf.AUTO_REUSE):
-            self.alpha = self.add_weight(
-                name="Alpha",
-                shape=[self.output_channels],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                trainable=True
-            )
+        # Create weights
+        #with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
+        #NOTE: can't use absolute scopes as variables need unique names
+        self.kernel = self.add_weight(
+            name="Convolution/Kernel",
+            dtype=tf.float32,
+            shape=kernel_shape,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        # Batch normalization parameters
+        # NOTE: moving average statistics during training
+        # with tf.variable_scope("Convolution"):
+        self.mean = self.add_weight(
+            name="Convolution/BatchNorm/Mean",
+            shape=[self.output_channels],
+            dtype=tf.float32,
+            initializer=tf.zeros_initializer(),
+            trainable=False
+           )
+        self.variance = self.add_weight(
+            name="Convolution/BatchNorm/Variance",
+            shape=[self.output_channels],
+            dtype=tf.float32,
+            initializer=tf.ones_initializer(),
+            trainable=False
+           )
+        # Trainable batch_norm parameters
+        self.gamma = self.add_weight(
+            name="Convolution/BatchNorm/Gamma",
+            shape=[self.output_channels],
+            dtype=tf.float32,
+            initializer=tf.ones_initializer(),
+            trainable=True
+           )
+        self.beta = self.add_weight(
+            name="Convolution/BatchNorm/Beta",
+            shape=[self.output_channels],
+            dtype=tf.float32,
+            initializer=tf.zeros_initializer(),
+            trainable=True
+           )
+
+        #with tf.variable_scope(self._res_scope, reuse=tf.AUTO_REUSE):
+        self.alpha = self.add_weight(
+            name="Residual/Alpha",
+            shape=[self.output_channels],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            trainable=True
+        )
         self.built = True
 
     def call(self, inputs, training, **kwargs):
@@ -288,168 +290,165 @@ class Bottleneck(Layer):
             conv_shape = self.kernel_size + (conv_filters, conv_filters)
         exp_shape = (1, 1, conv_filters, self.output_channels)
         # batch norm parameters)
-        with tf.variable_scope(self._proj_scope, reuse=tf.AUTO_REUSE):
-            self.proj_kernel = self.add_weight(
-                name="Kernel",
-                shape=proj_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=self.trainable
-            )
-            # PReLU alpha
-            self.proj_alpha = self.add_weight(
-                name="Alpha",
-                shape=[proj_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=self.trainable
-            )
-            with tf.variable_scope(self._proj_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.proj_mean = self.add_weight(
-                    name="Mean",
-                    shape=[proj_shape[-1]],
+        #with tf.variable_scope("Projection"):
+        self.proj_kernel = self.add_weight(
+            name="Projection/Kernel",
+            shape=proj_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=self.trainable
+        )
+        # PReLU alpha
+        self.proj_alpha = self.add_weight(
+            name="Projection/Alpha",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=self.trainable
+        )
+        #with tf.variable_scope("BatchNorm"):
+        self.proj_mean = self.add_weight(
+            name="Projection/BatchNorm/Mean",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.proj_variance = self.add_weight(
+            name="Projection/BatchNorm/Variance",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.proj_gamma = self.add_weight(
+            name="Projection/BatchNorm/Gamma",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=self.trainable
+        )
+        self.proj_beta = self.add_weight(
+            name="Projection/BatchNorm/Beta",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=self.trainable
+        )
+        #with tf.variable_scope("Convolution"):
+        if self.asymmetric:
+            self.conv_kernel = [
+                self.add_weight(
+                    name="Convolution/KernelCol",
+                    shape=conv_shape[0],
                     dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.proj_variance = self.add_weight(
-                    name="Variance",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.proj_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
+                    initializer=self.kernel_initializer,
+                    regularizer=self.kernel_regularizer,
                     trainable=self.trainable
-                )
-                self.proj_beta = self.add_weight(
-                    name="Beta",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=self.trainable
-                )
-        with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
-            if self.asymmetric:
-                self.conv_kernel = [
-                    self.add_weight(
-                        name="KernelCol",
-                        shape=conv_shape[0],
-                        dtype=tf.float32,
-                        initializer=self.kernel_initializer,
-                        regularizer=self.kernel_regularizer,
-                        trainable=self.trainable
-                    ),
-                    self.add_weight(
-                        name="KernelRow",
-                        shape=conv_shape[1],
-                        dtype=tf.float32,
-                        initializer=self.kernel_initializer,
-                        regularizer=self.kernel_regularizer,
-                        trainable=self.trainable
-                    )
-                ]
-            else: # regular conv
-                self.conv_kernel = self.add_weight(
-                    name="Kernel",
-                    shape=conv_shape,
+                ),
+                self.add_weight(
+                    name="Convolution/KernelRow",
+                    shape=conv_shape[1],
                     dtype=tf.float32,
                     initializer=self.kernel_initializer,
                     regularizer=self.kernel_regularizer,
                     trainable=self.trainable
                 )
-            # PReLU alpha
-            self.conv_alpha = self.add_weight(
-                name="Alpha",
-                shape=[conv_filters],
+            ]
+        else: # regular conv
+            self.conv_kernel = self.add_weight(
+                name="Convolution/Kernel",
+                shape=conv_shape,
                 dtype=tf.float32,
                 initializer=self.kernel_initializer,
                 regularizer=self.kernel_regularizer,
                 trainable=self.trainable
             )
-            with tf.variable_scope(self._conv_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.conv_mean = self.add_weight(
-                    name="Mean",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.conv_variance = self.add_weight(
-                    name="Variance",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.conv_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.ones(),
-                    trainable=self.trainable
-                )
-                self.conv_beta = self.add_weight(
-                    name="Beta",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.zeros(),
-                    trainable=self.trainable
-                )
+        # PReLU alpha
+        self.conv_alpha = self.add_weight(
+            name="Convolution/Alpha",
+            shape=[conv_filters],
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=self.trainable
+        )
+        #with tf.variable_scope("BatchNorm"):
+        self.conv_mean = self.add_weight(
+            name="Convolution/BatchNorm/Mean",
+            shape=[conv_filters],
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.conv_variance = self.add_weight(
+            name="Convolution/BatchNorm/Variance",
+            shape=[conv_filters],
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.conv_gamma = self.add_weight(
+            name="Convolution/BatchNorm/Gamma",
+            shape=[conv_filters],
+            initializer=tf.initializers.ones(),
+            trainable=self.trainable
+        )
+        self.conv_beta = self.add_weight(
+            name="Convolution/BatchNorm/Beta",
+            shape=[conv_filters],
+            initializer=tf.initializers.zeros(),
+            trainable=self.trainable
+        )
 
-        with tf.variable_scope(self._exp_scope, reuse=tf.AUTO_REUSE):
-            self.exp_kernel = self.add_weight(
-                name="Kernel",
-                shape=exp_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=self.trainable
-            )
-            with tf.variable_scope(self._exp_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.exp_mean = self.add_weight(
-                    name="Mean",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.exp_variance = self.add_weight(
-                    name="Variance",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.exp_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=self.trainable
-                )
-                self.exp_beta = self.add_weight(
-                    name="Beta",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=self.trainable
-                )
+        #with tf.variable_scope("Expansion"):
+        self.exp_kernel = self.add_weight(
+            name="Expansion/Kernel",
+            shape=exp_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=self.trainable
+        )
+        #with tf.variable_scope("BatchNorm"):
+        self.exp_mean = self.add_weight(
+            name="Expansion/BatchNorm/Mean",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.exp_variance = self.add_weight(
+            name="Expansion/BatchNorm/Variance",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.exp_gamma = self.add_weight(
+            name="Expansion/BatchNorm/Gamma",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=self.trainable
+        )
+        self.exp_beta = self.add_weight(
+            name="Expansion/BatchNorm/Beta",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=self.trainable
+        )
 
-        with tf.variable_scope(self._res_scope, reuse=tf.AUTO_REUSE):
-            self.residual_alpha = self.add_weight(
-                name="Alpha",
-                shape=[exp_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=self.trainable
-            )
+        #with tf.variable_scope("Residual"):
+        self.residual_alpha = self.add_weight(
+            name="Residual/Alpha",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=self.trainable
+        )
         self.built = True
 
     def call(self, inputs, training, **kwargs):
@@ -635,148 +634,145 @@ class BottleneckDownsample(Layer):
         exp_shape  = (1, 1, conv_filters, self.output_channels)
         # Create weights for each sub-layer (conv kernel, PReLU weights and
         # batch norm parameters)
-        with tf.variable_scope(self._proj_scope, reuse=tf.AUTO_REUSE):
-            self.proj_kernel = self.add_weight(
-                name="Kernel",
-                shape=proj_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            # PReLU alpha
-            self.proj_alpha = self.add_weight(
-                name="Alpha",
-                shape=[proj_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            with tf.variable_scope(self._proj_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.proj_mean = self.add_weight(
-                    name="Mean",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.proj_variance = self.add_weight(
-                    name="Variance",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.proj_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=True
-                )
-                self.proj_beta = self.add_weight(
-                    name="Beta",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=True
-                )
-        with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
-            self.conv_kernel = self.add_weight(
-                name="Kernel",
-                shape=conv_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            # PReLU alpha
-            self.conv_alpha = self.add_weight(
-                name="Alpha",
-                shape=[conv_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            with tf.variable_scope(self._conv_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.conv_mean = self.add_weight(
-                    name="Mean",
-                    shape=[conv_shape[-1]],
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.conv_variance = self.add_weight(
-                    name="Variance",
-                    shape=[conv_shape[-1]],
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.conv_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[conv_shape[-1]],
-                    initializer=tf.initializers.ones(),
-                    trainable=True
-                )
-                self.conv_beta = self.add_weight(
-                    name="Beta",
-                    shape=[conv_shape[-1]],
-                    initializer=tf.initializers.zeros(),
-                    trainable=True
-                )
+        # NOTE: can't use variable scopes as variables names need to be
+        #       unique to be caught as a checkpointable.
+        #with tf.variable_scope("Projection"):
+        self.proj_kernel = self.add_weight(
+            name="Projection/Kernel",
+            shape=proj_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        # PReLU alpha
+        self.proj_alpha = self.add_weight(
+            name="Projection/Alpha",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        self.proj_mean = self.add_weight(
+            name="Projection/BatchNorm/Mean",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.proj_variance = self.add_weight(
+            name="Projection/BatchNorm/Variance",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.proj_gamma = self.add_weight(
+            name="Projection/BatchNorm/Gamma",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=True
+        )
+        self.proj_beta = self.add_weight(
+            name="Projection/BatchNorm/Beta",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=True
+        )
+        #with tf.variable_scope(self._conv_scope):
+        self.conv_kernel = self.add_weight(
+            name="Convolution/Kernel",
+            shape=conv_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        # PReLU alpha
+        self.conv_alpha = self.add_weight(
+            name="Convolution/Alpha",
+            shape=[conv_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        #with tf.variable_scope(self._conv_scope+"BatchNorm/"):
+        self.conv_mean = self.add_weight(
+            name="Convolution/BatchNorm/Mean",
+            shape=[conv_shape[-1]],
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.conv_variance = self.add_weight(
+            name="Convolution/BatchNorm/Variance",
+            shape=[conv_shape[-1]],
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.conv_gamma = self.add_weight(
+            name="Convolution/BatchNorm/Gamma",
+            shape=[conv_shape[-1]],
+            initializer=tf.initializers.ones(),
+            trainable=True
+        )
+        self.conv_beta = self.add_weight(
+            name="Convolution/BatchNorm/Beta",
+            shape=[conv_shape[-1]],
+            initializer=tf.initializers.zeros(),
+            trainable=True
+        )
 
-        with tf.variable_scope(self._exp_scope, reuse=tf.AUTO_REUSE):
-            self.exp_kernel = self.add_weight(
-                name="Kernel",
-                shape=exp_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            with tf.variable_scope(self._exp_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.exp_mean = self.add_weight(
-                    name="Mean",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.exp_variance = self.add_weight(
-                    name="Variance",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.exp_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=True
-                )
-                self.exp_beta = self.add_weight(
-                    name="Beta",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=True
-                )
+        #with tf.variable_scope(self._exp_scope):
+        self.exp_kernel = self.add_weight(
+            name="Expansion/Kernel",
+            shape=exp_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        #with tf.variable_scope(self._exp_scope+"BatchNorm/"):
+        self.exp_mean = self.add_weight(
+            name="Expansion/BatchNorm/Mean",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.exp_variance = self.add_weight(
+            name="Expansion/BatchNorm/Variance",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.exp_gamma = self.add_weight(
+            name="Expansion/BatchNorm/Gamma",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=True
+        )
+        self.exp_beta = self.add_weight(
+            name="Expansion/BatchNorm/Beta",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=True
+        )
 
-        with tf.variable_scope(self._res_scope, reuse=tf.AUTO_REUSE):
-            self.residual_alpha = self.add_weight(
-                name="Alpha",
-                shape=[exp_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
+        self.residual_alpha = self.add_weight(
+            name="Residual/Alpha",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
         self.built = True
 
     def call(self, inputs, training, **kwargs):
@@ -958,155 +954,152 @@ class BottleneckUpsample(Layer):
         res_shape  = (1, 1, input_channels, self.output_channels)
         # Create weights for each sub-layer (conv kernel, PReLU weights and
         # batch norm parameters)
-        with tf.variable_scope(self._proj_scope, reuse=tf.AUTO_REUSE):
-            self.proj_kernel = self.add_weight(
-                name="Kernel",
-                shape=proj_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            # PReLU alpha
-            self.proj_alpha = self.add_weight(
-                name="Alpha",
-                shape=[proj_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            with tf.variable_scope(self._proj_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.proj_mean = self.add_weight(
-                    name="Mean",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.proj_variance = self.add_weight(
-                    name="Variance",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.proj_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=True
-                )
-                self.proj_beta = self.add_weight(
-                    name="Beta",
-                    shape=[proj_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=True
-                )
-        with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
-            self.conv_kernel = self.add_weight(
-                name="Kernel",
-                shape=conv_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            # PReLU alpha
-            self.conv_alpha = self.add_weight(
-                name="Alpha",
-                shape=[conv_filters],
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            with tf.variable_scope(self._conv_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.conv_mean = self.add_weight(
-                    name="Mean",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.conv_variance = self.add_weight(
-                    name="Variance",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.conv_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.ones(),
-                    trainable=True
-                )
-                self.conv_beta = self.add_weight(
-                    name="Beta",
-                    shape=[conv_filters],
-                    initializer=tf.initializers.zeros(),
-                    trainable=True
-                )
+        #with tf.variable_scope(self._proj_scope):
+        self.proj_kernel = self.add_weight(
+            name="Projection/Kernel",
+            shape=proj_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        # PReLU alpha
+        self.proj_alpha = self.add_weight(
+            name="Projection/Alpha",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        #with tf.variable_scope(self._proj_scope+"BatchNorm/"):
+        self.proj_mean = self.add_weight(
+            name="Projection/BatchNorm/Mean",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.proj_variance = self.add_weight(
+            name="Projection/BatchNorm/Variance",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.proj_gamma = self.add_weight(
+            name="Projection/BatchNorm/Gamma",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=True
+        )
+        self.proj_beta = self.add_weight(
+            name="Projection/BatchNorm/Beta",
+            shape=[proj_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=True
+        )
+        #with tf.variable_scope(self._conv_scope):
+        self.conv_kernel = self.add_weight(
+            name="Convolution/Kernel",
+            shape=conv_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        # PReLU alpha
+        self.conv_alpha = self.add_weight(
+            name="Convolution/Alpha",
+            shape=[conv_filters],
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        #with tf.variable_scope(self._conv_scope+"BatchNorm/"):
+        self.conv_mean = self.add_weight(
+            name="Convolution/BatchNorm/Mean",
+            shape=[conv_filters],
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.conv_variance = self.add_weight(
+            name="Convolution/BatchNorm/Variance",
+            shape=[conv_filters],
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.conv_gamma = self.add_weight(
+            name="Convolution/BatchNorm/Gamma",
+            shape=[conv_filters],
+            initializer=tf.initializers.ones(),
+            trainable=True
+        )
+        self.conv_beta = self.add_weight(
+            name="Convolution/BatchNorm/Beta",
+            shape=[conv_filters],
+            initializer=tf.initializers.zeros(),
+            trainable=True
+        )
 
-        with tf.variable_scope(self._exp_scope, reuse=tf.AUTO_REUSE):
-            self.exp_kernel = self.add_weight(
-                name="Kernel",
-                shape=exp_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            with tf.variable_scope(self._exp_scope+"BatchNorm/",
-                                   reuse=tf.AUTO_REUSE):
-                self.exp_mean = self.add_weight(
-                    name="Mean",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=False
-                )
-                self.exp_variance = self.add_weight(
-                    name="Variance",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=False
-                )
-                self.exp_gamma = self.add_weight(
-                    name="Gamma",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.ones(),
-                    trainable=True
-                )
-                self.exp_beta = self.add_weight(
-                    name="Beta",
-                    shape=[exp_shape[-1]],
-                    dtype=tf.float32,
-                    initializer=tf.initializers.zeros(),
-                    trainable=True
-                )
-        with tf.variable_scope(self._res_scope, reuse=tf.AUTO_REUSE):
-            self.res_kernel = self.add_weight(
-                name="Kernel",
-                shape=res_shape,
-                dtype=tf.float32,
-                initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
-            self.residual_alpha = self.add_weight(
-                name="Alpha",
-                shape=[exp_shape[-1]],
-                dtype=tf.float32,
-                initializer=self.alpha_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=True
-            )
+        #with tf.variable_scope(self._exp_scope):
+        self.exp_kernel = self.add_weight(
+            name="Expansion/Kernel",
+            shape=exp_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        #with tf.variable_scope(self._exp_scope+"BatchNorm/"):
+        self.exp_mean = self.add_weight(
+            name="Expansion/BatchNorm/Mean",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=False
+        )
+        self.exp_variance = self.add_weight(
+            name="Expansion/BatchNorm/Variance",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=False
+        )
+        self.exp_gamma = self.add_weight(
+            name="Expansion/BatchNorm/Gamma",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.ones(),
+            trainable=True
+        )
+        self.exp_beta = self.add_weight(
+            name="Expansion/BatchNorm/Beta",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=tf.initializers.zeros(),
+            trainable=True
+        )
+        #with tf.variable_scope(self._res_scope):
+        self.res_kernel = self.add_weight(
+            name="Residual/Kernel",
+            shape=res_shape,
+            dtype=tf.float32,
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
+        self.residual_alpha = self.add_weight(
+            name="Residual/Alpha",
+            shape=[exp_shape[-1]],
+            dtype=tf.float32,
+            initializer=self.alpha_initializer,
+            regularizer=self.kernel_regularizer,
+            trainable=True
+        )
         self.built = True
 
     def call(self, inputs, unpool_argmax, training, **kwargs):
