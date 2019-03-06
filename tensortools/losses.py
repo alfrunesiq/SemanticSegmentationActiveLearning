@@ -29,29 +29,27 @@ def masked_softmax_cross_entropy(
         _labels = labels
         if labels.shape.ndims == 4:
             _labels = tf.squeeze(_labels, axis=3)
-
-        if weight > 0.0:
-            # Start off with a zero mask and incrementally add in each
-            # label weighted by the inverse of it's respective importance
-            pred = tf.math.argmax(logits, axis=3, name="Predictions")
-            error_mask = tf.cast(tf.math.not_equal(pred, _labels), tf.float32)
-            _mask = tf.cast(mask, dtype=tf.float32)
-            _mask = _mask*(1 + error_mask*weight)
-        else:
-            # Create mask to ignore @mask_index labels
-            _mask = tf.cast(mask, dtype=tf.float32)
         # Apply label smoothing
         on_value  = 1.0 - label_smoothing
         off_value = label_smoothing / (num_classes - 1.0)
         # Generate one-hot labels
-        _labels   = tf.one_hot(_labels, num_classes,
-                               on_value, off_value,
-                               axis=3,
-                               dtype=tf.float32,
-                               name="LabelsOneHot")
-        _labels = tf.stop_gradient(_labels)
+        _labels_oh   = tf.one_hot(_labels, num_classes,
+                                  on_value, off_value,
+                                  axis=3,
+                                  dtype=tf.float32,
+                                  name="LabelsOneHot")
+        _labels_oh = tf.stop_gradient(_labels_oh)
+
+        # Create mask to ignore @mask_index labels
+        _mask = tf.cast(mask, dtype=tf.float32)
+        if weight > 1.0: # ENet type mask weighting
+            p_class = tf.reduce_sum(tf.nn.softmax(logits) * _labels_oh, axis=-1)
+            w_class = tf.math.divide(1.0, tf.math.log(weight + p_class))
+            _mask = _mask * w_class
+
         loss = tf.nn.softmax_cross_entropy_with_logits_v2(
-            labels=_labels, logits=logits, axis=-1, name="SoftmaxCrossEntropy")
+            labels=_labels_oh, logits=logits, axis=-1,
+            name="SoftmaxCrossEntropy")
         # Apply mask / weighting
         loss = tf.math.multiply(loss, _mask)
         # Do the mean in two takes: first in batch dimension,
@@ -63,6 +61,94 @@ def masked_softmax_cross_entropy(
         # Compute scalar mean loss
         loss = tf.math.reduce_mean(loss, name="MeanCrossEntropy")
     return loss
+
+def multiscale_masked_softmax_cross_entropy(
+        labels,
+        logits,
+        mask,
+        num_classes,
+        weight=0.0,
+        label_smoothing=0.0,
+        scope=None):
+    """
+    Evaluates the softmax cross-entropy loss, and masks out labels using
+    @mask parameter. Optionally if @weight is greater than zero, the
+    loss also punishes missclassified labels by a factor (1+weights),
+    this is to help cope with sparse classes.
+    :param labels:          ground truth labels (tf.uint8).
+    :param logits:          list of segmentation output logits in
+                            decrementing scale.
+    :param mask:            mask for labels should be ignored.
+    :param num_classes:     number of valid calsses.
+    :param weight:          [optional] weight parameter to punish errors.
+    :param label_smoothing: [optional] label smoothing on per pixel.
+                            classification.
+    :param scope:           [optional] scope for the operations.
+    :returns: The mean cross entropy loss
+    :rtype:   tf.Tensor: @logits.dtype (tf.float32)
+    """
+    with tf.name_scope(scope) as name_scope:
+        # Squeeze out that singleton dimension
+        _labels = labels
+        if labels.shape.ndims == 4:
+            _labels = tf.squeeze(_labels, axis=3)
+        # Apply label smoothing
+        on_value  = 1.0 - label_smoothing
+        off_value = label_smoothing / (num_classes - 1.0)
+        # Generate one-hot labels
+        _labels_oh   = tf.one_hot(_labels, num_classes,
+                               on_value, off_value,
+                               axis=3,
+                               dtype=tf.float32,
+                               name="LabelsOneHot")
+        _labels_oh = tf.stop_gradient(_labels_oh)
+
+        # Create mask to ignore @mask_index labels
+        _mask = tf.cast(mask, dtype=tf.float32)
+        if weight > 1.0: # ENet type mask weighting
+            p_class = tf.reduce_sum(tf.nn.softmax(logits[0]) * _labels_oh, axis=-1)
+            w_class = tf.math.divide(1.0, tf.math.log(weight + p_class))
+            _mask = _mask * w_class
+
+        def apply_cross_entropy(labels_oh, logits, mask):
+            loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+                labels=labels_oh, logits=logits, axis=-1,
+                name="SoftmaxCrossEntropy")
+            # Apply mask / weighting
+            loss = tf.math.multiply(loss, mask)
+            # Do the mean in two takes: first in batch dimension,
+            # then spatial with higher precission
+            loss = tf.reduce_mean(loss, axis=0, name="BatchMeanCrossEntropy")
+            # Cast to float64, spatial dimensions can make the numeric
+            # errors can be severe for high resolution images
+            loss = tf.cast(loss, tf.float64)
+            # Compute scalar mean loss
+            loss = tf.math.reduce_mean(loss, name="MeanCrossEntropy")
+            return loss
+
+        losses = [apply_cross_entropy(_labels_oh, logits[0], _mask)]
+        var_count = 0
+        for _logits in logits[1:]:
+            with tf.variable_scope("tmp", reuse=tf.AUTO_REUSE):
+                tmp_krnl = tf.get_variable("Kernel_" + str(var_count),
+                                           shape=[1, 1,
+                                                  _logits.shape[-1],
+                                                  num_classes],
+                                           trainable=True)
+            var_count += 1
+            _logits = tf.nn.conv2d(_logits, tmp_krnl, strides=[1,1,1,1], padding="VALID")
+            # Weight by ratio of pixels of full size to downsampled size
+            w = float(_logits.shape.as_list()[1]*_logits.shape.as_list()[2]) \
+                / (logits[0].shape.as_list()[1]*logits[0].shape.as_list()[2])
+            _mask_ = tf.image.resize_nearest_neighbor(tf.expand_dims(_mask, axis=-1),
+                                                      _logits.shape[1:3])
+            _mask_ = tf.squeeze(_mask_, axis=-1)
+            _labels_oh_ = tf.image.resize_nearest_neighbor(_labels_oh,
+                                                           _logits.shape[1:3])
+            losses.append(w*apply_cross_entropy(_labels_oh_, _logits, _mask_))
+        loss = tf.math.add_n(losses)
+    return loss
+
 
 def L2_regularization(kernels, weight, scope=None):
     """
