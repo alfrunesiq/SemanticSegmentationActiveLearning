@@ -53,7 +53,6 @@ class InputStage:
         """
         self.logger     = logging.getLogger(__name__)
         self.name_scope = tf.name_scope("Dataset")
-        self.iterator   = None
 
         if len(input_shape) == 3:
             self.shape = input_shape
@@ -158,15 +157,11 @@ class InputStage:
                 self.datasets[name]["count"]    = \
                     ((len(filenames) - 1) // self.batch_size) + 1
                 # Create [re-]initializable iterator
-                if self.iterator == None:
-                    self.iterator = tf.data.Iterator.from_structure(
-                        output_types=dataset.output_types,
-                        output_shapes=dataset.output_shapes,
-                        output_classes=dataset.output_classes,
-                        shared_name="DatasetIterator")
+                self.datasets[name]["iterator"] = \
+                    dataset.make_initializable_iterator()
                 # Add initialization op for this datset
                 self.datasets[name]["init"] = \
-                    self.iterator.make_initializer(dataset)
+                    self.datasets[name]["iterator"].initializer
             # END scope @name
         # END scope "Dataset"
 
@@ -196,11 +191,11 @@ class InputStage:
         # Run the initializer
         sess.run(init_op)
 
-    def get_output(self):
+    def get_output(self, name):
         """
         NOTE: need to run initializer
         """
-        return self.iterator.get_next()
+        return self.datasets[name]["iterator"].get_next()
 
     def _default_decoder(self, example, crop_and_split=False):
         """

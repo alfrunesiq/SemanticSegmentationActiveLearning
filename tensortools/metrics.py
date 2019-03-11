@@ -1,3 +1,4 @@
+import numpy as np
 import tensorflow as tf
 
 class Eval:
@@ -173,10 +174,13 @@ class Eval:
             # Get total samples (pixels) accumulated in confusion mat
             samples_tot = tf.reduce_sum(confusion_mat)
 
-            # Per-class true positive
-            TP = tf.linalg.diag_part(confusion_mat, name="TruePositive")
+            # Per-class true positive (NOTE: diag_part has no GPU kernel)
+            # TP = tf.linalg.diag_part(confusion_mat, name="TruePositive")
+            eyes = tf.constant(np.eye(self.nclasses), dtype=confusion_mat.dtype)
+            TP_diag = tf.math.multiply(confusion_mat, eyes)
+            TP = tf.reduce_sum(TP_diag, axis=1, name="TruePositive")
 
-            confusion_off_diag = confusion_mat - tf.linalg.diag(TP)
+            confusion_off_diag = confusion_mat - TP_diag
             # Per-class false positives
             FP = tf.reduce_sum(confusion_off_diag, axis=0, name="FalsePositive")
             # Per-class false negatives

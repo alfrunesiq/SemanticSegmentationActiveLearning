@@ -1,9 +1,46 @@
+import numpy as np
 import tensorflow as tf
 
 from tensorflow.keras.layers    import Layer
 from tensorflow.python.training import moving_averages
 
 from ..util import extra_ops as xops
+
+def _kernel_regularization_scaling(kernel_size, regularizer, initializer,
+                                   transpose_kernel=False):
+    """
+    Scales the regularization constants with the kernel size according
+    to the initialization hypothesis
+    :param kernel_size:      4D-Tensor of conv kernels
+    :param regularizer:      tf.keras.regularizers.L1L2 object
+    :param initializer:      tf.initializers*
+    :param transpose_kernel: whether the kernel is for transpose conv.
+    :returns: regularizer with scaled parameters
+    """
+    var_scale = 1.0
+
+    if transpose_kernel:
+        kernel_size = [kernel_size[0], kernel_size[1],
+                        kernel_size[3], kernel_size[2]]
+
+    if isinstance(initializer, tf.initializers.glorot_uniform) or \
+       isinstance(initializer == tf.initializers.glorot_normal):
+        # Var = 2 / (fan_in + fan_out)
+        var_scale = 2. / ((kernel_size[0]*kernel_size[1]) \
+                          * (kernel_size[2] + kernel_size[3]))
+    elif isinstance(initializer, tf.initializers.he_normal) or \
+       isinstance(initializer == tf.initializers.he_uniform):
+        # Var = 1 / fan_in
+        var_scale = 1. / (kernel_size[0]*kernel_size[1]*kernel_size[2])
+
+    # L2(lambda) => Bayesian MAP: N(0, 1/lambda)
+    # -> Var(N(m, s)) = s = 1 / lambda
+    l2 = regularizer.l2 / var_scale
+    # L1(beta)  => Bayersian MAP: Laplace(0, 1/beta)
+    # -> Var(Laplace(a, b) = 2b^2
+    l1 = regularizer.l1 / np.sqrt(var_scale / 2)
+    return tf.keras.regularizers.l1_l2(l1=l1, l2=l2)
+
 
 class Initial(Layer):
 
@@ -19,6 +56,7 @@ class Initial(Layer):
                  trainable=True,
                  kernel_regularizer=None,
                  alpha_regularizer=None,
+                 regularization_scaling=False,
                  batch_norm_momentum=0.90,
                  name="Initial",
                  **kwargs):
@@ -49,6 +87,8 @@ class Initial(Layer):
         :param dilation_rate:       Optional dilation rate for conv op.
         :param kernel_initializer:  Optional initializer.
         :param kernel_regularizer:  Optional regularizer.
+        :param regularization_scaling: scale regularization constant
+                                       according to initialization scheme
         :param batch_norm_momentum: Batch norm moving average momentum.
         """
 
@@ -68,6 +108,8 @@ class Initial(Layer):
         self.alpha_regularizer   = tf.keras.regularizers.get(alpha_regularizer)
         self.batch_norm_momentum = batch_norm_momentum
 
+        self.regularization_scaling = regularization_scaling
+
     def build(self, input_shape):
         """
         :param input_shape: input shape NHWC
@@ -82,8 +124,14 @@ class Initial(Layer):
 
         # Compute shapes
         input_channels  = int(input_shape[-1])
-        filters = self.output_channels - input_channels
+        filters         = self.output_channels - input_channels
         kernel_shape    = self.kernel_size + (input_channels, filters)
+
+        # Compute regularizers
+        kernel_regularizer = self.kernel_regularizer
+        if self.regularization_scaling:
+            kernel_regularizer = _kernel_regularization_scaling(
+                kernel_shape, kernel_regularizer, self.kernel_initializer)
 
         # Create weights
         #with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
@@ -93,7 +141,7 @@ class Initial(Layer):
             dtype=tf.float32,
             shape=kernel_shape,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=kernel_regularizer,
             trainable=True
         )
         # Batch normalization parameters
@@ -186,6 +234,7 @@ class Bottleneck(Layer):
                  dilation_rate=(1,1),
                  kernel_initializer=tf.initializers.glorot_uniform(),
                  kernel_regularizer=None,
+                 regularization_scaling=False,
                  alpha_initializer = tf.initializers.constant(0.25),
                  trainable=True,
                  drop_rate=0.1,
@@ -238,6 +287,8 @@ class Bottleneck(Layer):
         :param kernel_initializer:  Optional kernel initializer.
         :param alpha_initializer:   Optional PReLU initializer
         :param kernel_regularizer:  Optional regularizer.
+        :param regularization_scaling: scale regularization constant
+                                       according to initialization scheme
         :param drop_rate:           Optional dropout rate.
         :param batch_norm_momentum: BatchNorm moving average momentum.
         :param name:                Scope name for the block
@@ -257,6 +308,8 @@ class Bottleneck(Layer):
         self.kernel_regularizer  = tf.keras.regularizers.get(kernel_regularizer)
         self.drop_rate           = drop_rate
         self.batch_norm_momentum = batch_norm_momentum
+
+        self.regularization_scaling = regularization_scaling
 
     def build(self, input_shape):
         """
@@ -289,6 +342,25 @@ class Bottleneck(Layer):
         else:
             conv_shape = self.kernel_size + (conv_filters, conv_filters)
         exp_shape = (1, 1, conv_filters, self.output_channels)
+
+        # Compute regularizers
+        proj_regularizer = self.kernel_regularizer
+        conv_regularizer = self.kernel_regularizer
+        exp_regularizer  = self.kernel_regularizer
+        if self.regularization_scaling:
+            proj_regularizer = _kernel_regularization_scaling(
+                proj_shape, self.kernel_regularizer, self.kernel_initializer)
+            if self.asymmetric:
+                conv_regularizer = _kernel_regularization_scaling(
+                    conv_shape[0], self.kernel_regularizer,
+                    self.kernel_initializer)
+            else:
+                conv_regularizer = _kernel_regularization_scaling(
+                    conv_shape, self.kernel_regularizer,
+                    self.kernel_initializer)
+            exp_regularizer  = _kernel_regularization_scaling(
+                exp_shape, self.kernel_regularizer, self.kernel_initializer)
+
         # batch norm parameters)
         #with tf.variable_scope("Projection"):
         self.proj_kernel = self.add_weight(
@@ -296,8 +368,8 @@ class Bottleneck(Layer):
             shape=proj_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
-            trainable=self.trainable
+            regularizer=proj_regularizer,
+            trainable=True
         )
         # PReLU alpha
         self.proj_alpha = self.add_weight(
@@ -306,7 +378,7 @@ class Bottleneck(Layer):
             dtype=tf.float32,
             initializer=self.alpha_initializer,
             regularizer=self.kernel_regularizer,
-            trainable=self.trainable
+            trainable=True
         )
         #with tf.variable_scope("BatchNorm"):
         self.proj_mean = self.add_weight(
@@ -328,14 +400,14 @@ class Bottleneck(Layer):
             shape=[proj_shape[-1]],
             dtype=tf.float32,
             initializer=tf.initializers.ones(),
-            trainable=self.trainable
+            trainable=True
         )
         self.proj_beta = self.add_weight(
             name="Projection/BatchNorm/Beta",
             shape=[proj_shape[-1]],
             dtype=tf.float32,
             initializer=tf.initializers.zeros(),
-            trainable=self.trainable
+            trainable=True
         )
         #with tf.variable_scope("Convolution"):
         if self.asymmetric:
@@ -345,16 +417,16 @@ class Bottleneck(Layer):
                     shape=conv_shape[0],
                     dtype=tf.float32,
                     initializer=self.kernel_initializer,
-                    regularizer=self.kernel_regularizer,
-                    trainable=self.trainable
+                    regularizer=conv_regularizer,
+                    trainable=True
                 ),
                 self.add_weight(
                     name="Convolution/KernelRow",
                     shape=conv_shape[1],
                     dtype=tf.float32,
                     initializer=self.kernel_initializer,
-                    regularizer=self.kernel_regularizer,
-                    trainable=self.trainable
+                    regularizer=conv_regularizer,
+                    trainable=True
                 )
             ]
         else: # regular conv
@@ -363,8 +435,8 @@ class Bottleneck(Layer):
                 shape=conv_shape,
                 dtype=tf.float32,
                 initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
-                trainable=self.trainable
+                regularizer=conv_regularizer,
+                trainable=True
             )
         # PReLU alpha
         self.conv_alpha = self.add_weight(
@@ -373,7 +445,7 @@ class Bottleneck(Layer):
             dtype=tf.float32,
             initializer=self.kernel_initializer,
             regularizer=self.kernel_regularizer,
-            trainable=self.trainable
+            trainable=True
         )
         #with tf.variable_scope("BatchNorm"):
         self.conv_mean = self.add_weight(
@@ -392,13 +464,13 @@ class Bottleneck(Layer):
             name="Convolution/BatchNorm/Gamma",
             shape=[conv_filters],
             initializer=tf.initializers.ones(),
-            trainable=self.trainable
+            trainable=True
         )
         self.conv_beta = self.add_weight(
             name="Convolution/BatchNorm/Beta",
             shape=[conv_filters],
             initializer=tf.initializers.zeros(),
-            trainable=self.trainable
+            trainable=True
         )
 
         #with tf.variable_scope("Expansion"):
@@ -407,8 +479,8 @@ class Bottleneck(Layer):
             shape=exp_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
-            trainable=self.trainable
+            regularizer=exp_regularizer,
+            trainable=True
         )
         #with tf.variable_scope("BatchNorm"):
         self.exp_mean = self.add_weight(
@@ -430,14 +502,14 @@ class Bottleneck(Layer):
             shape=[exp_shape[-1]],
             dtype=tf.float32,
             initializer=tf.initializers.ones(),
-            trainable=self.trainable
+            trainable=True
         )
         self.exp_beta = self.add_weight(
             name="Expansion/BatchNorm/Beta",
             shape=[exp_shape[-1]],
             dtype=tf.float32,
             initializer=tf.initializers.zeros(),
-            trainable=self.trainable
+            trainable=True
         )
 
         #with tf.variable_scope("Residual"):
@@ -447,7 +519,7 @@ class Bottleneck(Layer):
             dtype=tf.float32,
             initializer=self.alpha_initializer,
             regularizer=self.kernel_regularizer,
-            trainable=self.trainable
+            trainable=True
         )
         self.built = True
 
@@ -536,6 +608,7 @@ class BottleneckDownsample(Layer):
                  dilation_rate=(1,1),
                  kernel_initializer=tf.initializers.glorot_uniform(),
                  kernel_regularizer=None,
+                 regularization_scaling=False,
                  alpha_initializer = tf.initializers.constant(0.25),
                  drop_rate=0.1,
                  batch_norm_momentum=0.90,
@@ -586,6 +659,8 @@ class BottleneckDownsample(Layer):
         :param kernel_initializer:  Optional kernel initializer.
         :param alpha_initializer:   Optional PReLU initializer
         :param kernel_regularizer:  Optional regularizer.
+        :param regularization_scaling: scale regularization constant
+                                       according to initialization scheme
         :param drop_rate:           Optional dropout rate.
         :param batch_norm_momentum: BatchNorm moving average momentum.
         :param name:                Scope name for the block
@@ -605,6 +680,8 @@ class BottleneckDownsample(Layer):
         self.kernel_regularizer  = tf.keras.regularizers.get(kernel_regularizer)
         self.drop_rate           = drop_rate
         self.batch_norm_momentum = batch_norm_momentum
+
+        self.regularization_scaling = regularization_scaling
 
     def build(self, input_shape):
         """
@@ -632,6 +709,19 @@ class BottleneckDownsample(Layer):
         proj_shape = (2, 2, input_channels, conv_filters)
         conv_shape = self.kernel_size + (conv_filters, conv_filters)
         exp_shape  = (1, 1, conv_filters, self.output_channels)
+
+        # Compute regularizers
+        proj_regularizer = self.kernel_regularizer
+        conv_regularizer = self.kernel_regularizer
+        exp_regularizer  = self.kernel_regularizer
+        if self.regularization_scaling:
+            proj_regularizer = _kernel_regularization_scaling(
+                proj_shape, self.kernel_regularizer, self.kernel_initializer)
+            conv_regularizer = _kernel_regularization_scaling(
+                conv_shape, self.kernel_regularizer, self.kernel_initializer)
+            exp_regularizer  = _kernel_regularization_scaling(
+                exp_shape, self.kernel_regularizer, self.kernel_initializer)
+
         # Create weights for each sub-layer (conv kernel, PReLU weights and
         # batch norm parameters)
         # NOTE: can't use variable scopes as variables names need to be
@@ -642,7 +732,7 @@ class BottleneckDownsample(Layer):
             shape=proj_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=proj_regularizer,
             trainable=True
         )
         # PReLU alpha
@@ -688,7 +778,7 @@ class BottleneckDownsample(Layer):
             shape=conv_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=conv_regularizer,
             trainable=True
         )
         # PReLU alpha
@@ -732,7 +822,7 @@ class BottleneckDownsample(Layer):
             shape=exp_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=exp_regularizer,
             trainable=True
         )
         #with tf.variable_scope(self._exp_scope+"BatchNorm/"):
@@ -857,6 +947,7 @@ class BottleneckUpsample(Layer):
                  dilation_rate=(1,1),
                  kernel_initializer=tf.initializers.glorot_uniform(),
                  kernel_regularizer=None,
+                 regularization_scaling=False,
                  alpha_initializer = tf.initializers.constant(0.25),
                  drop_rate=0.1,
                  batch_norm_momentum=0.90,
@@ -907,6 +998,8 @@ class BottleneckUpsample(Layer):
         :param kernel_initializer:  Optional kernel initializer.
         :param alpha_initializer:   Optional PReLU initializer
         :param kernel_regularizer:  Optional regularizer.
+        :param regularization_scaling: scale regularization constant
+                                       according to initialization scheme
         :param drop_rate:           Optional dropout rate.
         :param batch_norm_momentum: BatchNorm moving average momentum.
         :param name:                Scope name for the block
@@ -925,6 +1018,8 @@ class BottleneckUpsample(Layer):
         self.kernel_regularizer  = tf.keras.regularizers.get(kernel_regularizer)
         self.drop_rate           = drop_rate
         self.batch_norm_momentum = batch_norm_momentum
+
+        self.regularization_scaling = regularization_scaling
 
     def build(self, input_shape):
         """
@@ -954,13 +1049,30 @@ class BottleneckUpsample(Layer):
         res_shape  = (1, 1, input_channels, self.output_channels)
         # Create weights for each sub-layer (conv kernel, PReLU weights and
         # batch norm parameters)
+
+        # Compute regularizers
+        proj_regularizer = self.kernel_regularizer
+        conv_regularizer = self.kernel_regularizer
+        exp_regularizer  = self.kernel_regularizer
+        res_regularizer  = self.kernel_regularizer
+        if self.regularization_scaling:
+            proj_regularizer = _kernel_regularization_scaling(
+                proj_shape, self.kernel_regularizer, self.kernel_initializer)
+            conv_regularizer = _kernel_regularization_scaling(
+                conv_shape, self.kernel_regularizer,
+                self.kernel_initializer, transpose_kernel=True)
+            exp_regularizer  = _kernel_regularization_scaling(
+                exp_shape, self.kernel_regularizer, self.kernel_initializer)
+            res_regularizer  = _kernel_regularization_scaling(
+                res_shape, self.kernel_regularizer, self.kernel_initializer)
+
         #with tf.variable_scope(self._proj_scope):
         self.proj_kernel = self.add_weight(
             name="Projection/Kernel",
             shape=proj_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=proj_regularizer,
             trainable=True
         )
         # PReLU alpha
@@ -1007,7 +1119,7 @@ class BottleneckUpsample(Layer):
             shape=conv_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=conv_regularizer,
             trainable=True
         )
         # PReLU alpha
@@ -1051,7 +1163,7 @@ class BottleneckUpsample(Layer):
             shape=exp_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=exp_regularizer,
             trainable=True
         )
         #with tf.variable_scope(self._exp_scope+"BatchNorm/"):
@@ -1089,7 +1201,7 @@ class BottleneckUpsample(Layer):
             shape=res_shape,
             dtype=tf.float32,
             initializer=self.kernel_initializer,
-            regularizer=self.kernel_regularizer,
+            regularizer=res_regularizer,
             trainable=True
         )
         self.residual_alpha = self.add_weight(
@@ -1187,6 +1299,7 @@ class Final(Layer):
                  dilation_rate=(1,1),
                  kernel_initializer=tf.initializers.glorot_uniform(),
                  kernel_regularizer=None,
+                 regularization_scaling=False,
                  name="Final",
                  **kwargs):
         """
@@ -1197,6 +1310,9 @@ class Final(Layer):
         :param dilation_rate:       Optional dilation rate for conv op.
         :param kernel_initializer:  Optional initializer.
         :param kernel_regularizer:  Optional regularizer.
+        :param regularization_scaling: scale regularization constant
+                                       according to initialization scheme
+        :param name:                name of layer scope
         """
 
         super(Final, self).__init__(name=name)
@@ -1208,6 +1324,8 @@ class Final(Layer):
 
         self.kernel_initializer  = tf.keras.initializers.get(kernel_initializer)
         self.kernel_regularizer  = tf.keras.regularizers.get(kernel_regularizer)
+
+        self.regularization_scaling = regularization_scaling
 
     def build(self, input_shape):
         """
@@ -1221,6 +1339,11 @@ class Final(Layer):
         # Compute shapes
         input_channels = int(input_shape[-1])
         kernel_shape = self.kernel_size + (self.classes, input_channels)
+
+        kernel_regularizer = self.kernel_regularizer
+        if self.regularization_scaling:
+            kernel_regularizer = _kernel_regularization_scaling(
+                kernel_shape, kernel_regularizer, self.kernel_initializer)
         # Create weights
         with tf.variable_scope(self._conv_scope, reuse=tf.AUTO_REUSE):
             self.kernel = self.add_weight(
@@ -1228,7 +1351,7 @@ class Final(Layer):
                 dtype=tf.float32,
                 shape=kernel_shape,
                 initializer=self.kernel_initializer,
-                regularizer=self.kernel_regularizer,
+                regularizer=kernel_regularizer,
                 trainable=True
             )
         self.built = True

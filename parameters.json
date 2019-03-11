@@ -8,8 +8,9 @@
         ],
         "batch_size"          : 4,
         "learning_rate"       : 1e-4,
-        "learning_rate_decay" : 0.75,
-        "L2_weight"           : 1e-3,
+        "learning_rate_decay" : 0.5,
+        "L2_weight"           : 2e-4,
+        "label_smoothing"     : 0.05,
         "optimizer"           : "Adam"
     },
     "network": {

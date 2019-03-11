@@ -41,7 +41,9 @@ def masked_softmax_cross_entropy(
         _labels_oh = tf.stop_gradient(_labels_oh)
 
         # Create mask to ignore @mask_index labels
-        _mask = tf.cast(mask, dtype=tf.float32)
+        _mask = mask
+        if mask.dtype != tf.float32:
+            _mask = tf.cast(mask, dtype=tf.float32)
         if weight > 1.0: # ENet type mask weighting
             p_class = tf.reduce_sum(tf.nn.softmax(logits) * _labels_oh, axis=-1)
             w_class = tf.math.divide(1.0, tf.math.log(weight + p_class))
@@ -69,6 +71,7 @@ def multiscale_masked_softmax_cross_entropy(
         num_classes,
         weight=0.0,
         label_smoothing=0.0,
+        normalize_scales=False,
         scope=None):
     """
     Evaluates the softmax cross-entropy loss, and masks out labels using
@@ -127,6 +130,7 @@ def multiscale_masked_softmax_cross_entropy(
             return loss
 
         losses = [apply_cross_entropy(_labels_oh, logits[0], _mask)]
+        weights = []
         var_count = 0
         for _logits in logits[1:]:
             with tf.variable_scope("tmp", reuse=tf.AUTO_REUSE):
@@ -137,17 +141,27 @@ def multiscale_masked_softmax_cross_entropy(
                                            trainable=True)
             var_count += 1
             _logits = tf.nn.conv2d(_logits, tmp_krnl, strides=[1,1,1,1], padding="VALID")
-            # Weight by ratio of pixels of full size to downsampled size
-            w = float(_logits.shape.as_list()[1]*_logits.shape.as_list()[2]) \
-                / (logits[0].shape.as_list()[1]*logits[0].shape.as_list()[2])
+            weights.append(tmp_krnl)
+            # Resize mask and label image (careful not to interpolate)
             _mask_ = tf.image.resize_nearest_neighbor(tf.expand_dims(_mask, axis=-1),
                                                       _logits.shape[1:3])
             _mask_ = tf.squeeze(_mask_, axis=-1)
             _labels_oh_ = tf.image.resize_nearest_neighbor(_labels_oh,
                                                            _logits.shape[1:3])
-            losses.append(w*apply_cross_entropy(_labels_oh_, _logits, _mask_))
-        loss = tf.math.add_n(losses)
-    return loss
+            if normalize_scales:
+                # Weight by ratio of pixels of full size to downsampled size
+                scale = (logits[0].shape.as_list()[1]*logits[0].shape.as_list()[2]) \
+                      / float(_logits.shape.as_list()[1]*_logits.shape.as_list()[2])
+                # Compute loss scaled by ratio of pixels
+                loss = scale * apply_cross_entropy(_labels_oh_, _logits, _mask_)
+            else:
+                loss = apply_cross_entropy(_labels_oh_, _logits, _mask_)
+            # Append loss to overall loss
+            losses.append(loss)
+        # Sum losses and normalize
+        loss = tf.math.add_n(losses) / float(len(losses))
+    # Also make sure to return the weights so they can be saved
+    return loss, weights
 
 
 def L2_regularization(kernels, weight, scope=None):
