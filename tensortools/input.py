@@ -6,6 +6,8 @@ import os
 import tensorflow as tf
 from google.protobuf.json_format import MessageToJson
 
+from . import tfrecord
+
 _CPU_COUNT = multiprocessing.cpu_count()
 del multiprocessing
 
@@ -285,7 +287,6 @@ class InputStage:
             label, mask = generate_mask(label)
         return image, label, mask
 
-
 def _peek_tfrecord(filepath):
     """
     Parses a single example tfrecord, and returns a dictionary of the
@@ -296,16 +297,12 @@ def _peek_tfrecord(filepath):
     :returns: first feature in the record
     :rtype:   dict
     """
-    example = tf.train.Example()
-    with open(filepath, "rb") as f:
-        record = f.read()[12:-4] # NOTE strip symbols added by TFRecordWriter
-        example.ParseFromString(record)
-        del record
-    # Convert to json and parse to dict
-    json_msg = MessageToJson(example)
-    features = json.loads(json_msg)
+    example = tfrecord.tfrecord2tfexamples(filepath)
+    # Convert example to dict
+    example_dict = tfrecord.MessageToDict(example)
+
     # Strip off redundant keys
-    fmt = features["features"]["feature"]
+    fmt = example_dict["features"]["feature"]
     # Strip off raw byte data
     def _strip_byteslists(d):
         for k in d.keys():
