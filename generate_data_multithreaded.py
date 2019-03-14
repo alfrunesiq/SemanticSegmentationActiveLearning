@@ -14,12 +14,11 @@ from functools import partial
 import numpy as np
 import tensorflow as tf
 
-config = tf.ConfigProto()
-config.gpu_options.visible_device_list = ""
-tf.enable_eager_execution(config=config)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+tf.enable_eager_execution()
 
-import support
-
+import datasets
 
 show_progress = False
 try:
@@ -44,22 +43,6 @@ def _bytes_feature(value):
 def _int64_feature(value):
     """Returns an int64_list from a bool / enum / int / uint."""
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
-
-helper = None; split_path = None
-def proc_initializer(args, path):
-    global helper, split_path
-    split_path = path
-    if args.dataset[0].lower() == "cityscapes":
-        use_coarse = True if args.extra is not None and \
-                             "coarse" in args.extra[0].lower() \
-                     else False
-        helper = support.Cityscapes(use_coarse)
-    elif args.dataset[0].lower() == "freiburg":
-        modalities = None if args.extra is None else args.extra
-        helper = support.Freiburg(modalities)
-    else:
-        raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
-
 
 def process_image(path, scale=1):
     ext = path.split(".")[-1]
@@ -86,9 +69,9 @@ def process_image(path, scale=1):
     shape = np.array(decoding.shape)
     if scale > 1:
         # Downsample by scale factor
-        shape = shape / [scale, scale, 1]
+        shape = shape // [scale, scale, 1]
         decoding = tf.image.resize_nearest_neighbor(
-            tf.exand_dims(decoding, axis=0), shape[:-1])
+            tf.expand_dims(decoding, axis=0), shape[:-1])
         decoding = tf.squeeze(decoding, axis=0)
         # update encoding
         if ext == "png" or ext == "tif":
@@ -97,7 +80,7 @@ def process_image(path, scale=1):
             encoding = tf.image.encode_png(decoding)
     return encoding, shape, ext
 
-def record_example(example, scale):
+def record_example(example, scale, dataset, split_path):
     # example = [str(ID), dict({str(type): str(path)})]
     features = {}
     shapes   = []
@@ -113,22 +96,23 @@ def record_example(example, scale):
                     "The label images need to be png files!"
                     "Got \"%s\"" % ext)
             label_encoding = tf.io.read_file(path)
-            label_decoding = tf.image.decode_png(label_encoding)
+            label_decoding = tf.image.decode_image(label_encoding)
             # Remapping of labels (can only be png)
-            label_decoding = np.array(label_decoding)
-            LUT = helper.get_label_mapping()
-            if np.array(label_decoding.shape)[-1] == 3:
-                # use green channel
-                label_decoding = label_decoding[:,:,1].astype(np.int32)
-                label_decoding = np.expand_dims(label_decoding, axis=-1)
+            label_decoding = tf.gather_nd(dataset.embedding,
+                                          tf.cast(label_decoding, tf.int32))
             # A bit awkward, but TF won't let do tf.nn.embedding_lookup
-            label_decoding = LUT[label_decoding]
+            shape = np.array(label_decoding.shape)
+            if scale > 1:
+                shape = shape // [scale, scale]
+                _label_decoding = label_decoding[tf.newaxis, :, :, tf.newaxis]
+                label_decoding = tf.image.resize_nearest_neighbor(_label_decoding,
+                                                                  shape[:2])
+                label_decoding = tf.squeeze(label_decoding, axis=0)
 
             label_encoding  = tf.image.encode_png(label_decoding)
-            shape = np.array(label_decoding.shape)
             features["label"] = _bytes_feature(label_encoding.numpy())
         else: # image data
-            image, shape, ext = process_image(path)
+            image, shape, ext = process_image(path, scale)
             if len(shape) == 3:
                 channels = shape[2]
             else:
@@ -150,6 +134,7 @@ def record_example(example, scale):
     # and label image is assumed to be single channel png image.
     features["height"] = _int64_feature(shape[0])
     features["width"]  = _int64_feature(shape[1])
+    features["id"]     = _bytes_feature(example[0])
     # Construct feature example
     tf_features = tf.train.Features(feature=features)
     tf_example  = tf.train.Example(features=tf_features)
@@ -161,43 +146,45 @@ def record_example(example, scale):
 
 
 def main(args):
-    if args.dataset[0].lower() == "cityscapes":
+    if args.dataset.lower() == "cityscapes":
         use_coarse = True if args.extra is not None and \
                              "coarse" in args.extra[0].lower() \
                      else False
-        helper = support.Cityscapes(use_coarse)
-    elif args.dataset[0].lower() == "freiburg":
+        dataset = datasets.Cityscapes(use_coarse)
+    elif args.dataset.lower() == "freiburg":
         modalities = None if args.extra is None else args.extra
-        helper = support.Freiburg(modalities)
+        dataset = datasets.Freiburg(modalities)
+    elif args.dataset.lower() == "vistas":
+        dataset = datasets.Vistas()
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset[0])
 
-    if os.path.exists(args.data_dir[0]):
-        dataset_paths = helper.file_associations(args.data_dir[0])
+    if os.path.exists(args.data_dir):
+        dataset_paths = dataset.file_associations(args.data_dir)
     else:
-        raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir[0])
+        raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir)
 
-    if not os.path.exists(args.output_dir[0]):
+    if not os.path.exists(args.output_dir):
         sys.stdout.write("Directory \"%s\" does not exist. "
-                         % args.output_dir[0])
+                         % args.output_dir)
         sys.stdout.write("Do you want to create it? [y/N] ")
         sys.stdout.flush()
         user_input = sys.stdin.read(1)
         if user_input.lower()[0] != "y":
             sys.exit(0)
         else:
-            os.makedirs(args.output_dir[0])
+            os.makedirs(args.output_dir)
 
     for split in dataset_paths.keys():
         # Create directory for the split
-        split_path = os.path.join(args.output_dir[0], split)
+        split_path = os.path.join(args.output_dir, split)
         if not os.path.exists(split_path):
             os.mkdir(split_path)
         try:
-            p = multiprocessing.Pool(initializer=proc_initializer, initargs=[args, split_path])
+            p = multiprocessing.Pool()
             # Progress bar
             examples = list(dataset_paths[split].items())
-            _record_example = partial(record_example, scale=args.scale_factor)
+            _record_example = partial(record_example, scale=args.scale_factor, dataset=dataset, split_path=split_path)
             if show_progress:
                 example_iter = tqdm(
                     p.imap_unordered(_record_example, examples),
@@ -213,7 +200,7 @@ def main(args):
             p.close()
     # Write feature keys in order to dynamically being able to reconstruct the
     # content of the records when reading the records.
-    meta_file = os.path.join(args.output_dir[0], "meta.txt")
+    meta_file = os.path.join(args.output_dir, "meta.txt")
     with open(meta_file, "w") as f:
         f.write("\n".join(features.keys()))
     # In order to reconstruct:
@@ -240,19 +227,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--data_root", \
                         type=str, \
-                        nargs=1, \
                         dest="data_dir", \
                         required=True, \
                         help="Path to data set root directory.")
     parser.add_argument("-t", "--dataset", \
                         type=str, \
-                        nargs=1, \
                         dest="dataset", \
                         required=True, \
                         help="Name of the dataset {cityscapes,freiburg,kitti}.")
     parser.add_argument("-o", "--output_dir", \
                         type=str, \
-                        nargs=1, \
                         dest="output_dir", \
                         required=True, \
                         help="Path to where to store the records.")

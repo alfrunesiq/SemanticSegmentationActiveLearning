@@ -12,7 +12,7 @@ import argparse
 import numpy as np
 import tensorflow as tf
 
-import support
+import datasets
 
 show_progress = False
 try:
@@ -25,6 +25,8 @@ try:
 except ImportError:
     pass
 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 def _bytes_feature(value):
   """Returns a bytes_list from a string / byte."""
   _bytes = value if not (isinstance(value, str) and sys.version_info[0] == 3) \
@@ -36,16 +38,21 @@ def _int64_feature(value):
   return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
 def main(args):
-    helper = None
+    dataset = None
+    scale_factor = args.scale_factor
+    scale_factor_image = None
+    scale_factor_label = None
 
     if args.dataset.lower() == "cityscapes":
         use_coarse = True if args.extra is not None and \
                              "coarse" in args.extra[0].lower() \
                      else False
-        helper = support.Cityscapes(use_coarse)
+        dataset = datasets.Cityscapes(use_coarse)
     elif args.dataset.lower() == "freiburg":
         modalities = None if args.extra is None else args.extra
-        helper = support.Freiburg(modalities)
+        dataset = datasets.Freiburg(modalities)
+    elif args.dataset.lower() == "vistas":
+        dataset = datasets.Vistas()
     else:
         raise ValueError("Invalid argument \"dataset\": %s" % args.dataset)
 
@@ -53,36 +60,47 @@ def main(args):
     input_filename = tf.placeholder(dtype=tf.string)
     file_contents  = tf.read_file(input_filename)
     # Seperate heads for decoding png or jpg
-    jpg_decoding = tf.image.decode_jpeg(file_contents)
-    png_decoding = tf.image.decode_png(file_contents)
+    image_decoding = tf.image.decode_image(file_contents)
+    label_decoding = tf.image.decode_image(file_contents)
     # Get the shape of image / labels to assert them equal
-    png_image_shape = tf.shape(png_decoding)
-    jpg_image_shape = tf.shape(jpg_decoding)
-    if args.scale_factor > 1:
-        scale_factors_png = tf.stack([args.scale_factor, args.scale_factor, 1])
-        scale_factors_jpg = tf.stack([args.scale_factor, args.scale_factor, 1])
-        png_image_shape = png_image_shape // scale_factors_png
-        jpg_image_shape = jpg_image_shape // scale_factors_jpg
-        png_decoding = tf.image.resize(
-            tf.expand_dims(png_decoding, axis=0), png_image_shape[:-1],
-            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-        jpg_decoding = tf.image.resize(
-            tf.expand_dims(jpg_decoding, axis=0), jpg_image_shape[:-1],
-            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-        png_decoding = tf.squeeze(png_decoding, axis=0)
-        jpg_decoding = tf.squeeze(jpg_decoding, axis=0)
-    png_encoding = tf.image.encode_png(png_decoding)
-    jpt_encoding = tf.image.encode_jpeg(jpg_decoding)
+    image_shape = tf.shape(image_decoding)
+    label_shape = tf.shape(label_decoding)
+    if args.width is not None:
+        scale_factor_image = image_shape[1] / args.width
+        scale_factor_label = label_shape[1] / args.width
+    if scale_factor_image is not None:
+        scale_factors_image = tf.stack([scale_factor_image,
+                                        scale_factor_image, 1])
+        scale_factors_label = tf.stack([scale_factor_label,
+                                        scale_factor_label, 1])
+        # Compute rescaled shapes
+        image_shape = tf.cast(tf.round(tf.cast(image_shape, tf.float64)
+                                       / scale_factors_image), tf.int32)
+        label_shape = tf.cast(tf.round(tf.cast(label_shape, tf.float64)
+                                       / scale_factors_label), tf.int32)
+
+        image_decoding = tf.image.resize_nearest_neighbor(
+            tf.expand_dims(image_decoding, axis=0), image_shape[:-1])
+        label_decoding = tf.image.resize_nearest_neighbor(
+            tf.expand_dims(label_decoding, axis=0), label_shape[:-1])
+        image_decoding = tf.squeeze(image_decoding, axis=0)
+        label_decoding = tf.squeeze(label_decoding, axis=0)
+    image_encoding = tf.cond(
+        tf.strings.regex_full_match(input_filename, ".+\.png$"),
+        true_fn =lambda: tf.image.encode_png(image_decoding),
+        false_fn=lambda: tf.image.encode_jpeg(image_decoding))
     # Remapping of labels (can only be png)
-    labels_mapped   = helper.label_mapping(png_decoding)
-    labels_encoding = tf.image.encode_png(labels_mapped)
+    embedding = tf.constant(dataset.embedding, dtype=tf.uint8)
+    label_remapped = tf.gather_nd(embedding, tf.cast(label_decoding, tf.int32))
+    label_remapped = tf.expand_dims(label_remapped, axis=-1)
+    label_encoding = tf.image.encode_png(label_remapped)
     # In order to convert tiff to png
     tif_input_image = tf.placeholder(tf.uint8, shape=[None,None,None])
     tif_png_encoding = tf.image.encode_png(tif_input_image)
     ##########################################################
 
     if os.path.exists(args.data_dir):
-        dataset_paths = helper.file_associations(args.data_dir)
+        dataset_paths = dataset.file_associations(args.data_dir)
     else:
         raise ValueError("Dataset path does not exist\n%s\n" % args.data_dir)
 
@@ -110,7 +128,9 @@ def main(args):
         # Progress bar
         if show_progress:
             example_iter = tqdm(list(dataset_paths[split].items()),
-                                desc="%-7s" % split)
+                                desc="%-7s" % split,
+                                ascii=True,
+                                dynamic_ncols=True)
         else:
             example_iter = list(dataset_paths[split].items())
         # Iterate over all examples in split and gather samples in
@@ -131,21 +151,12 @@ def main(args):
                             "The label images need to be png files!"
                             "Got \"%s\"" % ext)
                     label, shape = sess.run(
-                        fetches=[labels_encoding, png_image_shape],
+                        fetches=[label_encoding, label_shape],
                         feed_dict={input_filename: path})
                     features["label"] = _bytes_feature(label)
                 else: # image data
                     # Handle the different file extensions separately
-                    if ext == "png":
-                        image, shape = sess.run(
-                            fetches=[png_encoding, png_image_shape],
-                            feed_dict={input_filename: path})
-                    elif ext == "jpg" or ext == "jpeg":
-                        ext = "jpg"
-                        image, shape = sess.run(
-                            fetches=[jpg_encoding, jpg_image_shape],
-                            feed_dict={input_filename: path})
-                    elif ext == "tif" or ext == "tiff":
+                    if ext == "tif" or ext == "tiff":
                         # read image and convert to png
                         ext = "png"
                         # Read image as is (iscolor=-1)
@@ -158,6 +169,10 @@ def main(args):
                             image = np.expand_dims(image, axis=-1)
                         image = sess.run(tif_png_encoding,
                                          feed_dict={tif_input_image: image})
+                    elif ext == "png" or ext == "jpg" or ext == "jpeg":
+                        image, shape = sess.run(
+                            fetches=[image_encoding, image_shape],
+                            feed_dict={input_filename: path})
                     else:
                         raise ValueError(
                             "Unsupported image format \"%s\"" % ext)
@@ -232,9 +247,15 @@ if __name__ == "__main__":
                         required=True,
                         help="Path to where to store the records.")
     parser.add_argument("-s", "--scale",
-                        type=int,
+                        type=float,
                         default=1,
                         dest="scale_factor",
+                        required=False,
+                        help="Downscaling factor.")
+    parser.add_argument("-w", "--width",
+                        type=int,
+                        default=None,
+                        dest="width",
                         required=False,
                         help="Downscaling factor.")
     # TODO: make this a little nicer
