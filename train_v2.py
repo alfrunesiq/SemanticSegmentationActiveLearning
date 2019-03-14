@@ -18,28 +18,18 @@ except ImportError:
 
 # User includes
 import models
-import util.colormap
+import datasets
 import tensortools as tt
 
 def main(args):
-    # Handle dataset specific paths and number of classes and paths to
-    # training and validation set.
-    train_paths = []
-    val_paths   = []
-    classes = 0
     if args["dataset"] == "cityscapes":
-        classes = 19
-        train_paths.append(os.path.join(args["data_dir"], "train"))
-        if args["coarse"]:
-            train_paths.append(os.path.join(args["data_dir"], "train_extra"))
-        val_paths.append(os.path.join(args["data_dir"], "val"))
-
+        dataset = datasets.Cityscapes(coarse=args["coarse"])
     elif args["dataset"] == "freiburg":
-        classes = 6
-        train_paths.append(os.path.join(args["data_dir"], "train"))
-        val_path = os.path.join(args["data_dir"], "val")
-        if os.path.exists(val_path):
-            train_paths.append(val_path)
+        dataset = datasets.Freiburg()
+    else:
+        raise NotImplementedError
+    train_paths = dataset.get_train_paths(args["data_dir"])
+    val_paths   = dataset.get_validation_paths(args["data_dir"])
 
     with tf.device("/device:CPU:0"):
         with tf.name_scope("Datasets"):
@@ -68,10 +58,10 @@ def main(args):
         weight_regularization = tf.keras.regularizers.l2(args["l2_reg"])
     # Build training and validation network and get prediction output
     train_net = models.ENet(
-        classes,
+        dataset.num_classes,
         weight_regularization=weight_regularization
     )
-    val_net = models.ENet(classes)
+    val_net = models.ENet(dataset.num_classes)
     with tf.device("/device:GPU:0"): #FIXME
         train_logits = train_net(train_image, training=True)
         train_pred = tf.math.argmax(train_logits, axis=-1,
@@ -85,12 +75,21 @@ def main(args):
     with tf.name_scope("Cost"):
         with tf.device("/device:GPU:0"): # FIXME
             # Establish loss function
-            with tf.control_dependencies(train_net.updates):
+            if args["multiscale"]:
+                loss, loss_weights = tt.losses.multiscale_masked_softmax_cross_entropy(
+                    train_label,
+                    [train_logits, train_net.bottleneck5_1[0],
+                     train_net.bottleneck4_2[0], train_net.bottleneck3_8[0]],
+                    train_mask, dataset.num_classes,
+                    weight=args["loginverse_weight"],
+                    scope="XEntropy")
+                train_net.loss_scale_weights = loss_weights #NOTE
+            else:
                 loss = tt.losses.masked_softmax_cross_entropy(
                     train_label,
                     train_logits,
-                    train_mask, classes,
-                    #weight=1.02, NOTE NOTE NOTE NOTE NOTE
+                    train_mask, dataset.num_classes,
+                    weight=args["loginverse_weight"],
                     scope="XEntropy")
 
             cost = loss
@@ -109,26 +108,26 @@ def main(args):
             # Create optimization procedure
             optimizer = tf.train.AdamOptimizer(learning_rate)
 
-            # Make sure to update the metrics when evaluating loss
+            # Create training op
             train_op  = optimizer.minimize(cost, global_step=global_step,
                                            name="TrainOp")
+            # NOTE: Make sure to update batchnorm params and metrics for
+            # each training iteration.
 
     with tf.name_scope("Summary"):
         # Create colormap for image summaries
-        colormap = tf.constant(util.colormap.colormap, dtype=tf.uint8,
+        colormap = tf.constant(dataset.colormap, dtype=tf.uint8,
                                name="Colormap")
         # Create metric evaluation and summaries
         with tf.device("/device:GPU:0"):
             with tf.name_scope("TrainMetrics"):
                 train_metrics = tt.metrics.Eval(train_pred, train_label,
-                                                classes, train_mask)
+                                                dataset.num_classes, train_mask)
                 metric_update_op = train_metrics.get_update_op()
                 metric_summaries = train_metrics.get_summaries()
-                batch_metric_summaries = train_metrics.get_batch_summaries()
 
             train_summary_iter = tf.summary.merge(
                 [
-                    batch_metric_summaries["Global"],
                     tf.summary.scalar("CrossEntropyLoss", loss,
                                       family="Losses"),
                     tf.summary.scalar("TotalCost", cost,
@@ -150,24 +149,23 @@ def main(args):
         with tf.device("/device:GPU:1"):
             with tf.name_scope("ValidationMetrics"):
                 val_metrics = tt.metrics.Eval(val_pred, val_label,
-                                              classes, val_mask)
+                                              dataset.num_classes, val_mask)
                 val_metric_update_op = val_metrics.get_update_op()
                 val_metric_summaries = val_metrics.get_summaries()
-                val_batch_metric_summaries = val_metrics.get_batch_summaries()
 
-            with tf.control_dependencies([val_metric_update_op]):
-                val_summary_epoch = tf.summary.merge(
-                    [
-                        val_metric_summaries["Global"],
-                        val_metric_summaries["Class"],
-                        val_metric_summaries["ConfusionMat"],
-                        tf.summary.image("Input", val_image),
-                        tf.summary.image("Label", tf.gather(
-                            colormap, tf.cast(val_label, tf.int32))),
-                        tf.summary.image("Predictions", tf.gather(
-                            colormap, tf.cast(val_pred, tf.int32)))
-                    ], name="EpochSummaries"
-                   )
+                with tf.control_dependencies([val_metric_update_op]):
+                    val_summary_epoch = tf.summary.merge(
+                        [
+                            val_metric_summaries["Global"],
+                            val_metric_summaries["Class"],
+                            val_metric_summaries["ConfusionMat"],
+                            tf.summary.image("Input", val_image),
+                            tf.summary.image("Label", tf.gather(
+                                colormap, tf.cast(val_label, tf.int32))),
+                            tf.summary.image("Predictions", tf.gather(
+                                colormap, tf.cast(val_pred, tf.int32)))
+                        ], name="EpochSummaries"
+                       )
 
     sess_config = tf.ConfigProto(allow_soft_placement=True)
     with tf.Session(config=sess_config) as sess:
@@ -181,7 +179,8 @@ def main(args):
                     "step"     : global_step,
                     "summary"  : train_summary_iter,
                     "train_op" : train_op,
-                    "update"   : metric_update_op
+                    "update"   : metric_update_op,
+                    "updates"  : train_net.updates
                 },
                 "epoch"     : {
                     "step"     : epoch_step,
@@ -199,6 +198,11 @@ def main(args):
             }
         }
 
+        if not os.path.exists(args["log_dir"]):
+            os.makedirs(args["log_dir"])
+            # Dumb parameter configuration (args)
+            with open(os.path.join(args["log_dir"], "config.json"), "w+") as f:
+                json.dump(args, f, indent=4, sort_keys=True)
         # Create summary writer objects
         summary_writer = tf.summary.FileWriter(args["log_dir"],
                                                graph=sess.graph)
@@ -206,10 +210,10 @@ def main(args):
         with tf.name_scope("Checkpoint"):
             checkpoint = tf.train.Checkpoint(model=train_net,
                                              epoch=epoch_step,
-                                             step=global_step)
+                                             step=global_step
+                                             #,optimizer=optimizer
+                )
             checkpoint_name = os.path.join(args["log_dir"], "model")
-            if not os.path.exists(args["log_dir"]):
-                os.makedirs(args["log_dir"])
 
             if args["checkpoint"] is not None:
                 # CMDline checkpoint given
@@ -250,7 +254,9 @@ def main(args):
             _iter = range(0,train_batches)
             if show_progress:
                 _iter = tqdm.tqdm(_iter, desc="train[%3d/%3d]"
-                                  % (epoch, args["epochs"]))
+                                  % (epoch, args["epochs"]),
+                                  ascii=True,
+                                  dynamic_ncols=True)
             # Initialize input stage
             input_stage.init_iterator("train", sess)
             input_stage.init_iterator("val", sess)
@@ -289,17 +295,20 @@ def main(args):
                     results["train"]["iteration"]["summary"],
                     results["train"]["iteration"]["step"])
                 #summary_writer.add_run_metadata(run_metadata, "step=%d" % i)
+
+            # Update epoch counter
+            _epoch = sess.run(epoch_step_inc)
+
+            # Update epoch summaries
             summary_writer.add_summary(results["train"]["epoch"]["summary"],
                                        results["train"]["epoch"]["step"])
             summary_writer.flush()
             # Save checkpoint
             checkpoint.save(checkpoint_name, sess)
-            # Update epoch counter
-            _epoch = sess.run(epoch_step_inc)
 
         ### FINAL VALIDATION ###
         _fetches = {
-            "val" : {"iteration" : dict(fetches["val"]["iteration"])}
+            "val" : {"iteration" : fetches["val"]["iteration"]}
                 }
         _iter = range(0, val_batches)
         if show_progress:
@@ -347,6 +356,7 @@ def parse_arguments():
     req_group = req_parser.add_argument_group(title="required arguments")
     req_group.add_argument("-d", "--data-dir",
                            type=str,
+                           dest="data_dir",
                            required=True,
                            help="Path to dataset root directory")
     req_group.add_argument("-l", "--log-dir",
@@ -362,48 +372,69 @@ def parse_arguments():
         type=int,
         dest="batch_size", required=False,
         default=default["hyperparameters"]["batch_size"],
-        help="Mini-batch size for stochastic gradient descent algorithm.")
+        help="Mini-batch size for stochastic gradient descent algorithm."
+    )
     opt_parser.add_argument(
         "-e", "--epochs",
         type=int,
         dest="epochs", required=False,
         default=default["config"]["epochs"],
-        help="How many epochs to do training.")
+        help="How many epochs to do training."
+    )
     opt_parser.add_argument(
         "-lr", "--learning_rate",
         type=float,
         dest="learning_rate", required=False,
         default=default["hyperparameters"]["learning_rate"],
         metavar="LEARNING_RATE",
-        help="Initial learning rate.")
+        help="Initial learning rate."
+    )
     opt_parser.add_argument(
         "--learning_rate_decay",
         type=float,
         dest="lr_decay", required=False,
         default=default["hyperparameters"]["learning_rate_decay"],
         metavar="DECAY",
-        help="Learning rate decay factor.")
+        help="Learning rate decay factor."
+    )
     opt_parser.add_argument(
         "-l2", "--l2-regularization",
         type=float,
         dest="l2_reg", required=False,
         default=default["hyperparameters"]["L2_weight"],
         metavar="L2_REGULARIZATION",
-        help="L2 Regularization hyperparameter.")
+        help="L2 Regularization hyperparameter."
+    )
     opt_parser.add_argument(
-        "--checkpoint_dir", "-cp",
+        "-sw", "--softmax-loginverse-weight",
+        type=float,
+        dest="loginverse_weight", required=False,
+        default=default["hyperparameters"]["softmax_loginverse_weight"],
+        help="Apply weighting: 1 / log(P_class + @sw)"
+    )
+    opt_parser.add_argument(
+        "--multiscale",
+        action="store_true",
+        required=False,
+        default=default["config"]["multiscale"],
+        dest="multiscale",
+        help="Create additional loss endpoints at each decoder stage."
+    )
+    opt_parser.add_argument(
+        "-c", "--checkpoint_dir",
         type=str,
         dest="checkpoint", required=False,
         metavar="CHECKPOINT",
-        help="Path to pretrained checkpoint.")
+        help="Path to pretrained checkpoint."
+    )
     opt_parser.add_argument(
         "-s", "--input-size",
         type=int, nargs=2,
         dest="size", required=False,
         default=[default["network"]["input"]["height"],
                  default["network"]["input"]["width"]],
-        help="Network input size <height width>.")
-
+        help="Network input size <height width>."
+    )
 
     # Create parser hierarchy
     # Top parser
@@ -422,7 +453,7 @@ def parse_arguments():
         conflict_handler="resolve",
         help="The Cityscapes dataset.")
     cityscapes.set_defaults(dataset="cityscapes")
-    cityscapes.add_argument("-c", "--use-coarse",
+    cityscapes.add_argument("--use-coarse",
                             action="store_true",
                             required=False,
                             dest="coarse")

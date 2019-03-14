@@ -1,17 +1,23 @@
 {
     "config" : {
-        "epochs"   : 1
+        "epochs"     : 100,
+        "multiscale" : false
     },
     "hyperparameters" : {
         "__doc__" : [
             "Training hyperparameters"
         ],
-        "batch_size"          : 4,
-        "learning_rate"       : 1e-4,
-        "learning_rate_decay" : 0.5,
-        "L2_weight"           : 2e-4,
-        "label_smoothing"     : 0.05,
-        "optimizer"           : "Adam"
+        "batch_size"                : 4,
+        "learning_rate"             : 1e-4,
+        "learning_rate_decay"       : 0.5,
+        "L2_weight"                 : 2e-4,
+        "label_smoothing"           : 0.05,
+        "softmax_loginverse_weight" : 1.02,
+        "optimizer"                 : {
+            "type"   : "Adam",
+            "kwargs" : {"beta1" : 0.9,
+                        "beta2" : 0.99}
+        }
     },
     "network": {
         "__doc__" : [
