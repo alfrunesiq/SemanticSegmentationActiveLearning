@@ -197,6 +197,7 @@ def main(args):
             # and label image is assumed to be single channel png image.
             features["height"] = _int64_feature(shape[0])
             features["width"]  = _int64_feature(shape[1])
+            features["id"]     = _bytes_feature(example[0])
             # Construct feature example
             tf_features = tf.train.Features(feature=features)
             tf_example  = tf.train.Example(features=tf_features)

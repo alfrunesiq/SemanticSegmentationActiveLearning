@@ -153,10 +153,12 @@ class Vistas:
         #{root}/{type}{video}/{split}/{city}/{city}_{seq:0>6}_{frame:0>6}_{type}{ext}
         splits = ["training", "validation", "testing"]
         data_types = ["images", "labels"]
-        split_map = {
+        name_map = {
             "training"   : "train",
             "validation" : "val",
-            "testing"    : "test"
+            "testing"    : "test",
+            "images"     : "image",
+            "labels"     : "label"
         }
         _file_associations = {
             "train": {},
@@ -168,12 +170,13 @@ class Vistas:
         for root, dirs, filenames in os.walk(root_path):
             basename = os.path.basename(root)
             if basename in splits:
-                _split = split_map[basename]
+                _split = name_map[basename]
                 continue
             if basename not in data_types:
                 continue
             for filename in filenames:
+                dtype = name_map[basename]
                 file_id = "".join(filename.split(".")[:-1])
                 _filename = os.path.join(root, filename)
-                _file_associations[_split].setdefault(file_id,{})[basename] = _filename
+                _file_associations[_split].setdefault(file_id,{})[dtype] = _filename
         return _file_associations

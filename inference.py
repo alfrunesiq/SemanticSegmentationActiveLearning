@@ -5,10 +5,12 @@ import argparse
 import json
 import logging
 import logging.config
+import multiprocessing
 import os
 import sys
 
 import tensorflow as tf
+import matplotlib.pyplot as plt
 
 import models
 import datasets
@@ -27,8 +29,38 @@ def decode_tfrecord(example, image_size):
     file_id = example["id"]
     return image, file_id
 
+class PlotThread(object):
+    def __init__(self, filepaths):
+        self.idx = 0
+        self.fig = plt.figure()
+        self.ax  = self.fig.gca()
+        self.img = None
+        self.filepaths = filepaths
+
+    def keyboard_callback(self, event):
+        if event.key == "left":
+            self.idx = (self.idx - 1) % len(self.filepaths)
+        elif event.key == "right":
+            self.idx = (self.idx + 1) % len(self.filepaths)
+        self.img = plt.imread(self.filepaths[self.idx])
+        self.ax.imshow(self.img)
+        self.ax.set_xlabel(os.path.basename(self.filepaths[self.idx]))
+        self.fig.canvas.draw()
+
+    def __call__(self):
+        # Wait for first image to be processed
+        while len(self.filepaths) == 0:
+            continue
+
+        self.fig.canvas.mpl_connect("key_press_event", self.keyboard_callback)
+        self.img = plt.imread(self.filepaths[self.idx])
+        self.ax.imshow(self.img)
+        self.ax.set_xlabel(os.path.basename(self.filepaths[self.idx]))
+        plt.show()
+
 def main(args):
     dataset = None
+    # Retrieve datset
     if args.dataset == "cityscapes":
         dataset = datasets.Cityscapes()
     elif args.dataset == "freiburg":
@@ -36,6 +68,7 @@ def main(args):
     else:
         raise NotImplementedError("Dataset \"%s\" not yet supported."
                                   % args.dataset)
+    # Configure directories
     data_dir = dataset.get_test_paths(args.data_dir)[0]
     if not os.path.exists(args.output):
         os.makedirs(args.output)
@@ -49,44 +82,66 @@ def main(args):
     decode_fn = lambda example: decode_tfrecord(example,
                                                 [height, width, channels])
 
+    # Create network and input stage
     net = models.ENet(dataset.num_classes)
     input_stage = tt.input.InputStage(1, input_shape=[height, width, channels])
+    # Add test set to input stage
     num_examples = input_stage.add_dataset("test", data_dir,
                                            decode_fn=decode_fn)
 
     input_image, file_id = input_stage.get_output("test")
     input_image = tf.expand_dims(input_image, axis=0)
 
-    logits = tf.squeeze(net(input_image, training=False), axis=0)
-    pred   = tf.math.argmax(logits, axis=-1)
+    logits = net(input_image, training=False)
+    p_class = tf.nn.softmax(logits)
+    if args.size is not None:
+        p_class = tf.image.resize_bilinear(logits, args.size)
+    pred = tf.math.argmax(p_class, axis=-1)
+    pred = tf.expand_dims(pred, axis=-1)
+    # Do the reverse embedding from trainId to dataset id
     embedding  = tf.constant(dataset.embedding_reversed, dtype=tf.uint8)
-    pred_embed = tf.gather(embedding, pred, axis=0)
+    pred_embed = tf.gather_nd(embedding, pred)
+    # Expand lost dimension
     pred_embed = tf.expand_dims(pred_embed, axis=-1)
-    pred_encoding = tf.image.encode_png(pred_embed)
 
-    filename = tf.string_join([file_id, ".png"])
+    # Encode output image
+    pred_encoding = tf.image.encode_png(pred_embed[0])
+
+    # Write encoded file to @args.output_dir
     output_dir = args.output
     if output_dir[-1] == "/":
         output_dir = output_dir[:-1]
+    filename = tf.string_join([file_id, ".png"])
     filepath = tf.string_join([output_dir, filename], separator="/")
     write_file = tf.io.write_file(filepath, pred_encoding)
 
+    # Restore model from checkpoint (@args.ckpt)
     ckpt = tf.train.Checkpoint(model=net)
     status = ckpt.restore(args.ckpt)
     status.assert_existing_objects_matched()
 
+    # Create session and restore model
     sess = tf.Session()
     status.initialize_or_restore(sess)
+    # Initialize input stage
     input_stage.init_iterator("test", sess)
 
+    # Create visualization thread
+    manager = multiprocessing.Manager()
+    filepaths = manager.list()
+    pt = PlotThread(filepaths)
+    p = multiprocessing.Process(target=pt)
+    p.start()
+    # Loop over all images
     while True:
         try:
-            _, _file_id = sess.run((write_file, file_id))
+            _, _file_id, path = sess.run((write_file, file_id, filepath))
+            filepaths.append(path.decode("ascii"))
             logger.info("Written processed sample %s" % str(_file_id))
         except tf.errors.OutOfRangeError:
             break
-
     logger.info("Inference successfully finished.")
+    p.join()
     return 0
 
 if __name__ == "__main__":
@@ -110,6 +165,13 @@ if __name__ == "__main__":
                         type=str,
                         dest="dataset", required=True,
                         help="Dataset type: {cityscapes, freiburg}."
+    )
+    parser.add_argument("-s", "--output-size",
+                        type=int,
+                        nargs=2,
+                        dest="size", required=False,
+                        default=None,
+                        help="Size of the output images."
     )
     args = parser.parse_args()
 
