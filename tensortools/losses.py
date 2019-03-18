@@ -134,7 +134,8 @@ def multiscale_masked_softmax_cross_entropy(
             _labels_ = tf.squeeze(_labels_)
             loss = masked_softmax_cross_entropy(_labels_, _logits_, 
                                                 _mask_, num_classes,
-                                                weight, label_smoothing)
+                                                weight, label_smoothing,
+                                                scope=name_scope)
             # Append loss to overall loss
             losses.append(loss)
         # Sum losses and normalize

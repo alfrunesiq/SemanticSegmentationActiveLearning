@@ -59,7 +59,8 @@ def main(args):
     # Build training and validation network and get prediction output
     train_net = models.ENet(
         dataset.num_classes,
-        weight_regularization=weight_regularization
+        weight_regularization=weight_regularization,
+        regularization_scaling=args["reg_scaling"]
     )
     val_net = models.ENet(dataset.num_classes)
     with tf.device("/device:GPU:0"): #FIXME
@@ -418,6 +419,14 @@ def parse_arguments():
         required=False,
         default=default["config"]["multiscale"],
         dest="multiscale",
+        help="Create additional loss endpoints at each decoder stage."
+    )
+    opt_parser.add_argument(
+        "--regularization-scaling",
+        action="store_true",
+        required=False,
+        default=default["hyperparameters"]["weight_regularization_scaling"],
+        dest="reg_scaling",
         help="Create additional loss endpoints at each decoder stage."
     )
     opt_parser.add_argument(
