@@ -1,14 +1,15 @@
 import numpy as np
 import tensorflow as tf
 
-class Eval:
+class Metrics:
     """
     Class for evaluating the classification results of the network.
     """
-    def __init__(self, predictions, labels, num_classes, mask):
+    def __init__(self, predictions, labels, num_classes, mask, scope="Metrics"):
         self.nclasses = num_classes
 
-        with tf.variable_scope("Eval"):
+        with tf.variable_scope("Eval") as _scope:
+
             # Flatten labels and predictions
             labels_ = tf.reshape(labels     , [-1])
             pred_   = tf.reshape(predictions, [-1])

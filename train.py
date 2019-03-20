@@ -26,6 +26,8 @@ def main(args):
         dataset = datasets.Cityscapes(coarse=args["coarse"])
     elif args["dataset"] == "freiburg":
         dataset = datasets.Freiburg()
+    elif args["dataset"] == "vistas":
+        dataset = datasets.Vistas()
     else:
         raise NotImplementedError
     train_paths = dataset.get_train_paths(args["data_dir"])
@@ -122,7 +124,7 @@ def main(args):
         # Create metric evaluation and summaries
         with tf.device("/device:GPU:0"):
             with tf.name_scope("TrainMetrics"):
-                train_metrics = tt.metrics.Eval(train_pred, train_label,
+                train_metrics = tt.metrics.Metrics(train_pred, train_label,
                                                 dataset.num_classes, train_mask)
                 metric_update_op = train_metrics.get_update_op()
                 metric_summaries = train_metrics.get_summaries()
@@ -141,7 +143,6 @@ def main(args):
                 train_summary_epoch = tf.summary.merge(
                     [
                         metric_summaries["Global"],
-                        metric_summaries["Class"],
                         metric_summaries["ConfusionMat"],
                     ], name="EpochSummaries"
                    )
@@ -149,7 +150,7 @@ def main(args):
         # Create metric evaluation and summaries
         with tf.device("/device:GPU:1"):
             with tf.name_scope("ValidationMetrics"):
-                val_metrics = tt.metrics.Eval(val_pred, val_label,
+                val_metrics = tt.metrics.Metrics(val_pred, val_label,
                                               dataset.num_classes, val_mask)
                 val_metric_update_op = val_metrics.get_update_op()
                 val_metric_summaries = val_metrics.get_summaries()
@@ -211,9 +212,8 @@ def main(args):
         with tf.name_scope("Checkpoint"):
             checkpoint = tf.train.Checkpoint(model=train_net,
                                              epoch=epoch_step,
-                                             step=global_step
-                                             #,optimizer=optimizer
-                )
+                                             step=global_step,
+                                             optimizer=optimizer)
             checkpoint_name = os.path.join(args["log_dir"], "model")
 
             if args["checkpoint"] is not None:
@@ -369,7 +369,7 @@ def parse_arguments():
     #Optional arguments
     opt_parser = argparse.ArgumentParser(add_help=False)
     opt_parser.add_argument(
-        "-b", "--batch_size",
+        "-b", "--batch-size",
         type=int,
         dest="batch_size", required=False,
         default=default["hyperparameters"]["batch_size"],
@@ -383,7 +383,7 @@ def parse_arguments():
         help="How many epochs to do training."
     )
     opt_parser.add_argument(
-        "-lr", "--learning_rate",
+        "-lr", "--learning-rate",
         type=float,
         dest="learning_rate", required=False,
         default=default["hyperparameters"]["learning_rate"],
@@ -391,7 +391,7 @@ def parse_arguments():
         help="Initial learning rate."
     )
     opt_parser.add_argument(
-        "--learning_rate_decay",
+        "--learning-rate-decay",
         type=float,
         dest="lr_decay", required=False,
         default=default["hyperparameters"]["learning_rate_decay"],
@@ -430,7 +430,7 @@ def parse_arguments():
         help="Create additional loss endpoints at each decoder stage."
     )
     opt_parser.add_argument(
-        "-c", "--checkpoint_dir",
+        "-c", "--checkpoint",
         type=str,
         dest="checkpoint", required=False,
         metavar="CHECKPOINT",
@@ -448,7 +448,7 @@ def parse_arguments():
     # Create parser hierarchy
     # Top parser
     top_parser = argparse.ArgumentParser(
-        usage="%s {cityscapes,freiburg} [-h/--help]"
+        usage="%s {cityscapes,freiburg,vistas} [-h/--help]"
         % sys.argv[0])
 
     # Dataset specific parsers inherits required arguments.
@@ -466,6 +466,15 @@ def parse_arguments():
                             action="store_true",
                             required=False,
                             dest="coarse")
+    # Cityscapes dataset
+    vistas = data_parsers.add_parser(
+        "vistas",
+        usage="%s {cityscapes,freiburg,vistas} -d DATA_DIR -l LOG_DIR [options]"
+        % sys.argv[0],
+        parents=[req_parser,opt_parser],
+        conflict_handler="resolve",
+        help="The Mapillary Vistas dataset.")
+    vistas.set_defaults(dataset="vistas")
     # Freiburg forrest dataset
     freiburg = data_parsers.add_parser(
         "freiburg",
@@ -482,7 +491,8 @@ def parse_arguments():
                           default=[],
                           help="Path to Freiburg Forest root directory.")
     if not "freiburg" in sys.argv and \
-       not "cityscapes" in sys.argv:
+       not "cityscapes" in sys.argv and \
+       not "vistas" in sys.argv:
         top_parser.print_help()
         sys.exit(0)
     args = top_parser.parse_args()

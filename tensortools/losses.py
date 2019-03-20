@@ -71,6 +71,7 @@ def multiscale_masked_softmax_cross_entropy(
         num_classes,
         weight=0.0,
         label_smoothing=0.0,
+        normalize=False,
         scope="MultiXEntropy"):
     """
     Evaluates the softmax cross-entropy loss, and masks out labels using
@@ -138,8 +139,10 @@ def multiscale_masked_softmax_cross_entropy(
                                                 scope=name_scope)
             # Append loss to overall loss
             losses.append(loss)
-        # Sum losses and normalize
-        loss = tf.math.add_n(losses) / float(len(losses))
+        # Sum losses
+        loss = tf.math.add_n(losses)
+        if normalize:
+            loss = loss / len(loss)
     # Also make sure to return the weights so they can be saved
     return loss, weights
 

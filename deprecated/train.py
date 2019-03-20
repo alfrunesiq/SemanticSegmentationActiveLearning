@@ -67,7 +67,7 @@ def main(args):
             train_op  = optimizer.minimize(loss, global_step=global_step,
                                            name="TrainOp")
         # Create metric evaluation and summaries
-        train_metrics = tt.metrics.Eval(pred, label, classes, mask)
+        train_metrics = tt.metrics.Metrics(pred, label, classes, mask)
         with tf.variable_scope("TrainSummary"):
             metric_summaries = train_metrics.get_summaries()
             batch_metric_summaries = train_metrics.get_batch_summaries()
@@ -111,7 +111,7 @@ def main(args):
             val_loss = tt.losses.masked_softmax_cross_entropy(
                 val_label, val_logits, val_mask, classes, scope="ValXEntropy")
         with tf.variable_scope("ValidationSummary"):
-            val_metrics = tt.metrics.Eval(val_pred, val_label,
+            val_metrics = tt.metrics.Metrics(val_pred, val_label,
                                           classes, val_mask)
             val_metric_summaries = val_metrics.get_summaries()
             val_batch_metric_summaries = val_metrics.get_batch_summaries()
