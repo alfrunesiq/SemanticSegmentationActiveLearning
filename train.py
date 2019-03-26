@@ -4,6 +4,7 @@ import json
 import logging
 import logging.config
 import os
+import pprint
 import sys
 
 # Non-standard includes
@@ -22,21 +23,29 @@ import datasets
 import tensortools as tt
 
 def main(args):
-    if args["dataset"] == "cityscapes":
-        dataset = datasets.Cityscapes(coarse=args["coarse"])
-    elif args["dataset"] == "freiburg":
+    # Retrieve dataset specific object
+    if args.dataset == "cityscapes":
+        dataset = datasets.Cityscapes(coarse=args.coarse)
+    elif args.dataset == "freiburg":
         dataset = datasets.Freiburg()
-    elif args["dataset"] == "vistas":
+    elif args.dataset == "vistas":
         dataset = datasets.Vistas()
     else:
-        raise NotImplementedError
-    train_paths = dataset.get_train_paths(args["data_dir"])
-    val_paths   = dataset.get_validation_paths(args["data_dir"])
+        raise NotImplementedError("Dataset \"%s\" not supported" % args.dataset)
+    # Gather train and validation paths
+    train_paths = os.path.join(args.data_dir, "train")
+    val_paths   = os.path.join(args.data_dir, "val")
+    # Retrieve training parameters
+    params  = args.params
+    hparams = params["hyperparams"]
 
     with tf.device("/device:CPU:0"):
         with tf.name_scope("Datasets"):
             # Setup input pipelines
-            input_stage = tt.input.InputStage(args["batch_size"], args["size"])
+            input_stage = tt.input.InputStage(
+                    params["batch_size"],
+                    input_shape=[params["network"]["input"]["height"],
+                                 params["network"]["input"]["width"]])
 
             # Add datasets
             train_batches = input_stage.add_dataset("train", train_paths,
@@ -50,51 +59,65 @@ def main(args):
 
         # Create step variables
         with tf.variable_scope("StepCounters"):
+            # I'll use one local (to this run) and a global step that
+            # will be checkpointed in order to run various schedules on
+            # the learning rate decay policy.
             global_step = tf.Variable(0, dtype=tf.int64,
                                       trainable=False, name="GlobalStep")
+            local_step = tf.Variable(0, dtype=tf.int64,
+                                      trainable=False, name="LocalStep")
+            global_step_op = global_step + local_step
             epoch_step = tf.Variable(0, trainable=False, name="EpochStep")
             epoch_step_inc = tf.assign_add(epoch_step, 1, name="EpochStepInc")
 
-    weight_regularization = None
-    if args["l2_reg"] > 0.0:
-        weight_regularization = tf.keras.regularizers.l2(args["l2_reg"])
+    regularization = {}
+    if hparams["weight_reg"]["L2"] > 0.0 \
+        or hparams["weight_reg"]["L1"] > 0.0:
+        regularization = {
+            "weight_regularization"  : tf.keras.regularizers.l1_l2(
+                                           l1=hparams["weight_reg"]["L1"],
+                                           l2=hparams["weight_reg"]["L2"]),
+            "regularization_scaling" : hparams["weight_reg"]["glorot_scaling"]
+        }
     # Build training and validation network and get prediction output
     train_net = models.ENet(
         dataset.num_classes,
-        weight_regularization=weight_regularization,
-        regularization_scaling=args["reg_scaling"]
+        **regularization
     )
     val_net = models.ENet(dataset.num_classes)
-    with tf.device("/device:GPU:0"): #FIXME
+    with tf.device("/device:GPU:0"):
         train_logits = train_net(train_image, training=True)
-        train_pred = tf.math.argmax(train_logits, axis=-1,
-                                    name="TrainPredictions")
+        train_pred   = tf.math.argmax(train_logits, axis=-1,
+                                      name="TrainPredictions")
 
-    with tf.device("/device:GPU:1"): #FIXME
+    with tf.device("/device:GPU:1"):
         val_logits = val_net(val_image, training=False)
-        val_pred = tf.math.argmax(val_logits, axis=-1, name="ValPredictions")
+        val_pred   = tf.math.argmax(val_logits, axis=-1,
+                                    name="ValidationPredictions")
 
     # Build cost function
     with tf.name_scope("Cost"):
-        with tf.device("/device:GPU:0"): # FIXME
+        with tf.device("/device:GPU:0"):
             # Establish loss function
-            if args["multiscale"]:
-                loss, loss_weights = tt.losses.multiscale_masked_softmax_cross_entropy(
+            if hparams["softmax"]["multiscale"]:
+                loss, loss_weights = \
+                        tt.losses.multiscale_masked_softmax_cross_entropy(
                     train_label,
-                    [train_logits, train_net.bottleneck5_1[0],
-                     train_net.bottleneck4_2[0], train_net.bottleneck3_8[0]],
+                    train_net.endpoint_outputs[0],
                     train_mask, dataset.num_classes,
-                    weight=args["loginverse_weight"],
+                    weight=hparams["softmax"]["loginverse_scaling"],
+                    label_smoothing=hparams["softmax"]["label_smoothing"],
                     scope="XEntropy")
-                train_net.loss_scale_weights = loss_weights #NOTE
+                # NOTE: this will make @loss_weights checkpointed
+                train_net.loss_scale_weights = loss_weights
             else:
                 loss = tt.losses.masked_softmax_cross_entropy(
                     train_label,
                     train_logits,
                     train_mask, dataset.num_classes,
-                    weight=args["loginverse_weight"],
+                    weight=hparams["softmax"]["loginverse_scaling"],
+                    label_smoothing=hparams["softmax"]["label_smoothing"],
                     scope="XEntropy")
-
             cost = loss
             # Add regularization to cost function
             if len(train_net.losses) > 0:
@@ -102,21 +125,24 @@ def main(args):
                 cost += tf.cast(regularization_loss, dtype=tf.float64)
 
             # Setup learning rate
-            learning_rate = args["learning_rate"]
-            if args["lr_decay"] > 0.0:
+            learning_rate = hparams["learning_rate"]
+            if hparams["learning_rate_decay"] > 0.0:
+                # Inverse time learning_rate if lr_decay specified
                 learning_rate = tf.train.inverse_time_decay(
-                    learning_rate, global_step,
-                    decay_steps=train_batches, decay_rate=args["lr_decay"])
+                    learning_rate, local_step,
+                    decay_steps=train_batches,
+                    decay_rate=hparams["learning_rate_decay"])
 
             # Create optimization procedure
             optimizer = tf.train.AdamOptimizer(learning_rate)
 
             # Create training op
-            train_op  = optimizer.minimize(cost, global_step=global_step,
+            train_op  = optimizer.minimize(cost, global_step=local_step,
                                            name="TrainOp")
             # NOTE: Make sure to update batchnorm params and metrics for
             # each training iteration.
 
+    # Create summary operations for training and validation network
     with tf.name_scope("Summary"):
         # Create colormap for image summaries
         colormap = tf.constant(dataset.colormap, dtype=tf.uint8,
@@ -125,7 +151,7 @@ def main(args):
         with tf.device("/device:GPU:0"):
             with tf.name_scope("TrainMetrics"):
                 train_metrics = tt.metrics.Metrics(train_pred, train_label,
-                                                dataset.num_classes, train_mask)
+                                                   dataset.num_classes, train_mask)
                 metric_update_op = train_metrics.get_update_op()
                 metric_summaries = train_metrics.get_summaries()
 
@@ -142,7 +168,7 @@ def main(args):
             with tf.control_dependencies([metric_update_op]):
                 train_summary_epoch = tf.summary.merge(
                     [
-                        metric_summaries["Global"],
+                        metric_summaries["Metrics"],
                         metric_summaries["ConfusionMat"],
                     ], name="EpochSummaries"
                    )
@@ -158,8 +184,8 @@ def main(args):
                 with tf.control_dependencies([val_metric_update_op]):
                     val_summary_epoch = tf.summary.merge(
                         [
-                            val_metric_summaries["Global"],
-                            val_metric_summaries["Class"],
+                            val_metric_summaries["Metrics"],
+                            val_metric_summaries["ClassMetrics"],
                             val_metric_summaries["ConfusionMat"],
                             tf.summary.image("Input", val_image),
                             tf.summary.image("Label", tf.gather(
@@ -168,17 +194,66 @@ def main(args):
                                 colormap, tf.cast(val_pred, tf.int32)))
                         ], name="EpochSummaries"
                        )
+    if not os.path.exists(args.log_dir):
+        os.makedirs(args.log_dir)
+        # Dump parameter configuration (args)
+        with open(os.path.join(args.log_dir, "config.json"), "w+") as f:
+            json.dump(params, f, indent=4, sort_keys=True)
 
+    # Create session with soft device placement
+    #     - some ops neet to run on the CPU
     sess_config = tf.ConfigProto(allow_soft_placement=True)
     with tf.Session(config=sess_config) as sess:
         # Initialize/restore model variables
         logger.debug("Initializing model...")
         sess.run(tf.global_variables_initializer())
+        # Create summary writer objects
+        summary_writer = tf.summary.FileWriter(args.log_dir,
+                                               graph=sess.graph)
+
+        # Create checkpoint object
+        with tf.name_scope("Checkpoint"):
+            checkpoint = tf.train.Checkpoint(model=train_net,
+                                             epoch=epoch_step,
+                                             step=global_step,
+                                             optimizer=optimizer)
+            checkpoint_name = os.path.join(args.log_dir, "model")
+
+            if args.checkpoint is not None:
+                # CMDline checkpoint given
+                ckpt = args.checkpoint
+                if os.path.isdir(ckpt):
+                    ckpt = tf.train.latest_checkpoint(ckpt)
+                if ckpt is None:
+                    logger.error("Checkpoint path \"%s\" is invalid.")
+                    return 1
+                logger.info("Resuming from checkpoint \"%s\"" % ckpt)
+                status = checkpoint.restore(ckpt)
+                status.assert_existing_objects_matched()
+                status.initialize_or_restore(sess)
+
+            elif tf.train.latest_checkpoint(args.log_dir) != None:
+                # Try to restore from checkpoint in logdir
+                ckpt = tf.train.latest_checkpoint(args.log_dir)
+                logger.info("Resuming from checkpoint \"%s\"" % ckpt)
+                status = checkpoint.restore(ckpt)
+                status.assert_existing_objects_matched()
+                status.initialize_or_restore(sess)
+
+            with tf.name_scope("UpdateValidationWeights"):
+                update_val_op = []
+                for i in range(len(val_net.layers)):
+                    for j in range(len(val_net.layers[i].variables)):
+                        update_val_op.append(tf.assign(val_net.layers[i].variables[j],
+                                                       train_net.layers[i].variables[j]))
+                update_val_op = tf.group(update_val_op)
+        # END scope Checkpoint
+
         # Prepare fetches
         fetches = {
             "train" : {
                 "iteration" : {
-                    "step"     : global_step,
+                    "step"     : global_step_op,
                     "summary"  : train_summary_iter,
                     "train_op" : train_op,
                     "update"   : metric_update_op,
@@ -199,63 +274,16 @@ def main(args):
                 }
             }
         }
-
-        if not os.path.exists(args["log_dir"]):
-            os.makedirs(args["log_dir"])
-            # Dumb parameter configuration (args)
-            with open(os.path.join(args["log_dir"], "config.json"), "w+") as f:
-                json.dump(args, f, indent=4, sort_keys=True)
-        # Create summary writer objects
-        summary_writer = tf.summary.FileWriter(args["log_dir"],
-                                               graph=sess.graph)
-        # Create checkpoint object
-        with tf.name_scope("Checkpoint"):
-            checkpoint = tf.train.Checkpoint(model=train_net,
-                                             epoch=epoch_step,
-                                             step=global_step,
-                                             optimizer=optimizer)
-            checkpoint_name = os.path.join(args["log_dir"], "model")
-
-            if args["checkpoint"] is not None:
-                # CMDline checkpoint given
-                ckpt = args["checkpoint"]
-                if os.path.isdir(ckpt):
-                    ckpt = tf.train.latest_checkpoint(ckpt)
-                if ckpt is None:
-                    logger.error("Checkpoint path \"%s\" is invalid.")
-                    return 1
-                logger.info("Resuming from checkpoint \"%s\"" % ckpt)
-                status = checkpoint.restore(ckpt)
-                status.assert_existing_objects_matched()
-                status.initialize_or_restore(sess)
-
-            elif tf.train.latest_checkpoint(args["log_dir"]) != None:
-                # Try to restore from checkpoint in logdir
-                ckpt = tf.train.latest_checkpoint(args["log_dir"])
-                logger.info("Resuming from checkpoint \"%s\"" % ckpt)
-                status = checkpoint.restore(ckpt)
-                status.assert_existing_objects_matched()
-                status.initialize_or_restore(sess)
-
-            with tf.name_scope("UpdateValidationWeights"):
-                update_val_op = []
-                for i in range(len(val_net.layers)):
-                    for j in range(len(val_net.layers[i].variables)):
-                        update_val_op.append(tf.assign(val_net.layers[i].variables[j],
-                                                       train_net.layers[i].variables[j]))
-                update_val_op = tf.group(update_val_op)
-        # END scope Checkpoint
-
         #run_options  = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
         #run_metadata = tf.RunMetadata()
         logger.info("Starting training loop...")
         results = {}
-        for epoch in range(1,args["epochs"]+1):
+        for epoch in range(1,params["epochs"]+1):
             # Create iterator counter to track progress
             _iter = range(0,train_batches)
             if show_progress:
                 _iter = tqdm.tqdm(_iter, desc="train[%3d/%3d]"
-                                  % (epoch, args["epochs"]),
+                                  % (epoch, params["epochs"]),
                                   ascii=True,
                                   dynamic_ncols=True)
             # Initialize input stage
@@ -310,11 +338,11 @@ def main(args):
         ### FINAL VALIDATION ###
         _fetches = {
             "val" : {"iteration" : fetches["val"]["iteration"]}
-                }
+        }
         _iter = range(0, val_batches)
         if show_progress:
-            _iter = tqdm.tqdm(_iter, desc="val[%3d/%3d]" % (args["epochs"],
-                                                            args["epochs"]))
+            _iter = tqdm.tqdm(_iter, desc="val[%3d/%3d]" % (params["epochs"],
+                                                            params["epochs"]))
         # Re initialize network
         input_stage.init_iterator("val", sess)
         sess.run(update_val_op)
@@ -330,7 +358,7 @@ def main(args):
                                    results["val"]["epoch"]["step"])
         # Close summary file
         summary_writer.close()
-        logger.info("Training successfully finished %d epochs" % args["epochs"])
+        logger.info("Training successfully finished %d epochs" % params["epochs"])
     return 0
 
 
@@ -342,19 +370,14 @@ class HelpfullParser(argparse.ArgumentParser):
 
 def parse_arguments():
     """
-    Handles parseing of commandline arguments and loading of defeaults
-    from `parameters.json`.
+    Handles parseing of commandline arguments
 
     :returns: The parsed commandline options
     :rtype:   dict
     """
-    # Load default arguments
-    default = None
-    with open("parameters.json") as f:
-        default = json.load(f)
     # Required arguments
     req_parser = argparse.ArgumentParser(add_help=False)
-    req_group = req_parser.add_argument_group(title="required arguments")
+    req_group = req_parser.add_argument_group(title="Required arguments")
     req_group.add_argument("-d", "--data-dir",
                            type=str,
                            dest="data_dir",
@@ -366,83 +389,22 @@ def parse_arguments():
                             required=True,
                             metavar="LOGDIR",
                             help="Logdirectory for the session.")
+    req_group.add_argument("-p", "--parameters",
+                            type=str,
+                            dest="params",
+                            default="conf/default_params.json",
+                            metavar="PARAMS",
+                            help="Path to parameter configuration file, "
+                                 "see conf subdirectory.")
+
     #Optional arguments
     opt_parser = argparse.ArgumentParser(add_help=False)
-    opt_parser.add_argument(
-        "-b", "--batch-size",
-        type=int,
-        dest="batch_size", required=False,
-        default=default["hyperparameters"]["batch_size"],
-        help="Mini-batch size for stochastic gradient descent algorithm."
-    )
-    opt_parser.add_argument(
-        "-e", "--epochs",
-        type=int,
-        dest="epochs", required=False,
-        default=default["config"]["epochs"],
-        help="How many epochs to do training."
-    )
-    opt_parser.add_argument(
-        "-lr", "--learning-rate",
-        type=float,
-        dest="learning_rate", required=False,
-        default=default["hyperparameters"]["learning_rate"],
-        metavar="LEARNING_RATE",
-        help="Initial learning rate."
-    )
-    opt_parser.add_argument(
-        "--learning-rate-decay",
-        type=float,
-        dest="lr_decay", required=False,
-        default=default["hyperparameters"]["learning_rate_decay"],
-        metavar="DECAY",
-        help="Learning rate decay factor."
-    )
-    opt_parser.add_argument(
-        "-l2", "--l2-regularization",
-        type=float,
-        dest="l2_reg", required=False,
-        default=default["hyperparameters"]["L2_weight"],
-        metavar="L2_REGULARIZATION",
-        help="L2 Regularization hyperparameter."
-    )
-    opt_parser.add_argument(
-        "-sw", "--softmax-loginverse-weight",
-        type=float,
-        dest="loginverse_weight", required=False,
-        default=default["hyperparameters"]["softmax_loginverse_weight"],
-        help="Apply weighting: 1 / log(P_class + @sw)"
-    )
-    opt_parser.add_argument(
-        "--multiscale",
-        action="store_true",
-        required=False,
-        default=default["config"]["multiscale"],
-        dest="multiscale",
-        help="Create additional loss endpoints at each decoder stage."
-    )
-    opt_parser.add_argument(
-        "--regularization-scaling",
-        action="store_true",
-        required=False,
-        default=default["hyperparameters"]["weight_regularization_scaling"],
-        dest="reg_scaling",
-        help="Create additional loss endpoints at each decoder stage."
-    )
     opt_parser.add_argument(
         "-c", "--checkpoint",
         type=str,
         dest="checkpoint", required=False,
         metavar="CHECKPOINT",
-        help="Path to pretrained checkpoint."
-    )
-    opt_parser.add_argument(
-        "-s", "--input-size",
-        type=int, nargs=2,
-        dest="size", required=False,
-        default=[default["network"]["input"]["height"],
-                 default["network"]["input"]["width"]],
-        help="Network input size <height width>."
+        help="Path to pretrained checkpoint directory or model."
     )
 
     # Create parser hierarchy
@@ -466,7 +428,7 @@ def parse_arguments():
                             action="store_true",
                             required=False,
                             dest="coarse")
-    # Cityscapes dataset
+    # Mapillary Vistas dataset
     vistas = data_parsers.add_parser(
         "vistas",
         usage="%s {cityscapes,freiburg,vistas} -d DATA_DIR -l LOG_DIR [options]"
@@ -475,6 +437,7 @@ def parse_arguments():
         conflict_handler="resolve",
         help="The Mapillary Vistas dataset.")
     vistas.set_defaults(dataset="vistas")
+
     # Freiburg forrest dataset
     freiburg = data_parsers.add_parser(
         "freiburg",
@@ -497,19 +460,26 @@ def parse_arguments():
         sys.exit(0)
     args = top_parser.parse_args()
 
-    return vars(args)
+    return args
 
 if __name__ == "__main__":
+    # Get and configure logger
     logger = logging.getLogger(__name__)
     with open("util/logging.json") as conf:
         conf_dict = json.load(conf)
         logging.config.dictConfig(conf_dict)
         del conf_dict
     args = parse_arguments()
+    # Load parameters
+    parameters = None
+    with open(args.params, "r") as f:
+        parameters = json.load(f)
+    # Overwrite with parameter dict
+    args.params = parameters
     # Print list of provided arguments
+
     logger.info(
         "Runnig with following parameters:\n%s" %
-        "\n".join(["%-16s : %-s" % (key, value)
-                   for key,value in list(args.items())]))
+        json.dumps(parameters, sort_keys=True, indent=4))
     exit_code = main(args)
     sys.exit(exit_code)

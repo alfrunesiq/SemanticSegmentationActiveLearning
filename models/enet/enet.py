@@ -303,6 +303,15 @@ class ENet(Model):
             self._setattr_tracking = True
         self.built = True
 
+    @property
+    def endpoint_outputs(self):
+        """
+        Returns all endpoint outputs, i.e. all scales from 
+        Stage 3 to final logits.
+        """
+        return list(map(list, zip(self.final, self.bottleneck5_1, 
+                                  self.bottleneck4_2, self.bottleneck3_8)))
+
     def call(self, inputs, training):
         """
         Implements the __call__ building functionality, interconnecting

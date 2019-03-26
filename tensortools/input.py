@@ -1,3 +1,4 @@
+import glob
 import json
 import logging
 import multiprocessing
@@ -67,7 +68,7 @@ class InputStage:
         self.batch_size = batch_size
         self.datasets   = {}
 
-    def add_dataset(self, name, path, epochs=1, augment=None, decode_fn=None):
+    def add_dataset(self, name, file_patterns, epochs=1, augment=None, decode_fn=None):
         """
         Add a new dataset to the collection self.datasets dictionary.
 
@@ -75,30 +76,29 @@ class InputStage:
               types. The addition of multiple datasets are mainly for the
               puropose of containint train-, validation- and testset.
 
-        :param name:      dataset identifier used to reference the data-
-                          set for retrieving dataset/iterator
-        :param path:      path to the pre-generated *.tfrecord files
-        :param augment:   Can either be
-                          a callable : this function is mapped after the
-                                       @decode_fn
-                          None       : leaves the images as is
-                          other      : applies default augmentation
-        :param decode_fn: Optional custom decode function to decode the
-                          parsed TFRecord examples. The function takes a
-                          parsed example as argument.
+        :param name:          dataset identifier used to reference the data-
+                              set for retrieving dataset/iterator
+        :param file_patterns: file pattern glob to TFRecord files
+        :param augment:       Can either be
+                              a callable : this function is mapped after the
+                                           @decode_fn
+                              None       : leaves the images as is
+                              other      : applies default augmentation
+        :param decode_fn:     Optional custom decode function to decode the
+                              parsed TFRecord examples. The function takes a
+                              parsed example as argument.
         """
-        # Path glob for records and list of filenames
-        records_glob = []
-        filenames = []
         # make sure path is contained in a list
-        if not isinstance(path, list):
-            path = [path]
-        # Gather list of filenames and glob for all filenames
-        for _dir in path:
-            records_glob.append(os.path.join(_dir, "*.tfrecord"))
-            filenames.extend(os.listdir(_dir))
+        if not isinstance(file_patterns, list):
+            file_patterns = [file_patterns]
 
-        # Peek into a tfrecord to retrieve format and channel counts
+        # Count number of examples
+        num_examples = 0
+        for i in range(len(file_patterns)):
+            num_examples += len(glob.glob(pattern))
+
+        # Peek into a tfrecord to retrieve format and channel count
+        _record = next(glob.iglob(file_patterns[0]))
         fmt = _peek_tfrecord(os.path.join(path[0],filenames[0]))
         self.input_depths = {}
 
@@ -115,8 +115,8 @@ class InputStage:
         with self.name_scope:
             with tf.name_scope(name):
                 # NOTE: tf.data.Dataset.list_files shuffles records_glob
-                self.records_glob = tf.data.Dataset.list_files(records_glob)
-                dataset   = tf.data.TFRecordDataset(self.records_glob)
+                records = tf.data.Dataset.list_files(file_patterns)
+                dataset = tf.data.TFRecordDataset(records)
 
                 if epochs != 0:
                     dataset = dataset.repeat(epochs)

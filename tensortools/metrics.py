@@ -94,6 +94,7 @@ class Metrics:
                                                     scope="Metrics")
         return self.summaries
 
+
     def _create_summaries(self, metrics, scope=None):
         """
         Evaluation metric summaries.
@@ -120,16 +121,20 @@ class Metrics:
             for i in range(self.nclasses):
                 class_acc  = tf.summary.scalar(
                     "Class_%d_Accuracy" % i,
-                    metrics["ClassAccuracy"][i])
+                    metrics["ClassAccuracy"][i], 
+                    family="ClassMetrics")
                 class_prec = tf.summary.scalar(
                     "Class_%d_Precission" % i,
-                    metrics["ClassPrecission"][i])
+                    metrics["ClassPrecission"][i], 
+                    family="ClassMetrics")
                 class_rec  = tf.summary.scalar(
                     "Class_%d_Recall" % i,
-                    metrics["ClassRecall"][i])
+                    metrics["ClassRecall"][i],
+                    family="ClassMetrics")
                 class_miou = tf.summary.scalar(
                     "Class_%d_MeanIoU" % i,
-                    metrics["ClassMeanIoU"][i])
+                    metrics["ClassMeanIoU"][i],
+                    family="ClassMetrics")
                 per_class_summaries.append([class_acc, class_prec,
                                             class_rec, class_miou])
             # Merge all per-class summaries to one operation
@@ -137,11 +142,11 @@ class Metrics:
                                                  name="ClassMetrics")
             # Create and merge global summaries
             pix_acc    = tf.summary.scalar(
-                "PixelAccuracy", metrics["PixelAccuracy"])
+                "PixelAccuracy", metrics["PixelAccuracy"], family="Metrics")
             mean_iou   = tf.summary.scalar(
-                "MeanIoU", metrics["MeanIoU"]
+                "MeanIoU", metrics["MeanIoU"], family="Metrics"
             )
-            global_summary = tf.summary.merge([pix_acc, mean_iou],
+            metrics_summary = tf.summary.merge([pix_acc, mean_iou],
                                               name="GlobalMetrics")
             # Create confusion matrix tensor summary
             # FIXME This can be done better !
@@ -149,8 +154,8 @@ class Metrics:
                 "ConfusionMatrix", tf.as_string(confusion_mat))
             summaries = {
                 "ConfusionMat" : confusion_summary,
-                "Global"       : global_summary,
-                "Class"        : per_class_summary}
+                "Metrics"      : metrics_summary,
+                "ClassMetrics" : per_class_summary}
         return summaries
 
     def _create_metrics(self, confusion_mat, scope=None):

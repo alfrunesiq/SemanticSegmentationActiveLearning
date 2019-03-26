@@ -18,15 +18,18 @@ Label = namedtuple( 'Label' , [
     'color'   , # label color in ground truth images
     ] )
 
+# NOTE: Vegetation and tree has same id in dataset and should really be merged
+#       into one single class: non-drivable vegetation.
+#       There are no pixels labeled void.
 labels = [
     #     name            id    trainId   color (R,G,B)
     Label("Void"       ,   0 ,  255     ,           None  ),
     Label("Road"       ,   1 ,    0     , (170, 170, 170) ),
     Label("Grass"      ,   2 ,    1     , (  0, 255,   0) ),
     Label("Vegetation" ,   3 ,    2     , (102, 102,  51) ),
-    Label("Tree"       ,   4 ,    3     , (  0,  60,   0) ),
-    Label("Sky"        ,   5 ,    4     , (  0, 120, 255) ),
-    Label("Obstacle"   ,   6 ,    5     , (  0,   0,   0) ),
+    Label("Tree"       ,   3 ,    2     , (  0,  60,   0) ),
+    Label("Sky"        ,   4 ,    3     , (  0, 120, 255) ),
+    Label("Obstacle"   ,   5 ,    4     , (  0,   0,   0) ),
 ]
 
 #-------------------------------------------------------------------------------
@@ -54,7 +57,7 @@ class Freiburg:
     @property
     def embedding_reversed(self):
         if self._colormap is None:
-            self._colormap = np.full((255, 3), 255, dtype=np.uint8)
+            self._colormap = np.full((256, 3), 255, dtype=np.uint8)
             for label in labels[1:]:
                 self._colormap[label.trainId] = label.color
         return self._colormap
@@ -62,7 +65,7 @@ class Freiburg:
     @property
     def colormap(self):
         if self._colormap is None:
-            self._colormap = np.full((255, 3), 255, dtype=np.uint8)
+            self._colormap = np.full((256, 3), 255, dtype=np.uint8)
             for label in labels[1:]:
                 self._colormap[label.trainId] = label.color
         return self._colormap
