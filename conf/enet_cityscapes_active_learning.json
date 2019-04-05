@@ -1,0 +1,36 @@
+{
+    "batch_size" : 8,
+    "epochs"     : 10,
+    "hyperparams" : {
+        "__doc__" : [
+            "Training hyperparameters"
+        ],
+        "learning_rate"       : 5e-4,
+        "learning_rate_decay" : 0.0,
+        "optimizer"           : {
+            "type"   : "Adam",
+            "kwargs" : {"beta1" : 0.9,
+                        "beta2" : 0.99}
+        },
+        "weight_reg" : {
+            "L2"             : 2e-4,
+            "L1"             : 0.0,
+            "glorot_scaling" : false
+        },
+        "softmax" : {
+            "label_smoothing"    : 0.0,
+            "loginverse_scaling" : 0.0,
+            "multiscale"         : true
+        }
+    },
+    "network": {
+        "__doc__" : [
+            "Network configuration parameters."
+        ],
+        "model" : "ENet",
+        "input" : {
+            "height" : 512,
+            "width"  : 1024
+        }
+    }
+}

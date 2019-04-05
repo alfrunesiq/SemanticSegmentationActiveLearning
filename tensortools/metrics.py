@@ -39,7 +39,7 @@ class Metrics:
             self.batch_summaries  = None
 
     def _intrnl_confusion_mat(self, labels, predictions, num_classes,
-                              weights=None, dtype=tf.int32, name=None):
+                              weights=None, dtype=tf.int32, name="ConfusionMat"):
         """
         Had to reimplement the tf.confusion_matrix function as the
         unneeded assertion operators takes an unnecessary amount of time.

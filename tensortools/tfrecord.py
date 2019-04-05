@@ -51,6 +51,28 @@ def tfrecord_iterator(filename):
                 yield event_bin
     return record_iterator()
 
+def parse_single_example(filename, fmt):
+    # Read raw file contents
+    file_content = tf.io.read_file(filename)
+    # Decode filst 8 bytes as length
+    length_bytes = tf.strings.substr(file_content, 0, 8)
+    length = tf.io.decode_raw(length_bytes, tf.int64)
+    length_int32 = tf.cast(length[0], tf.int32)
+    # Extract serialized record substring
+    serialized_record = tf.strings.substr(file_content, 12, length_int32)
+    # Parse example to dict
+    example = tf.io.parse_single_example(serialized_record, fmt)
+    return example
+
+def read_tfrecord(filename):
+    # NOTE: skips crc check
+    with tf.io.gfile.GFile(filename, "rb") as f:
+        header = f.read(12)
+        if header == b"":
+            return b""
+        record_length = struct.unpack("=Q", header[:8])[0]
+        serialized_record = f.read(record_length)
+    return serialized_record
 
 def tfrecord2example_dict(filename):
     return MessageToDict(tfrecord2tfexamples(filename))

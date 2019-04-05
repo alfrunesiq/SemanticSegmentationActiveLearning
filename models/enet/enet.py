@@ -306,10 +306,10 @@ class ENet(Model):
     @property
     def endpoint_outputs(self):
         """
-        Returns all endpoint outputs, i.e. all scales from 
+        Returns all endpoint outputs, i.e. all scales from
         Stage 3 to final logits.
         """
-        return list(map(list, zip(self.final, self.bottleneck5_1, 
+        return list(map(list, zip(self.final, self.bottleneck5_1,
                                   self.bottleneck4_2, self.bottleneck3_8)))
 
     def call(self, inputs, training):

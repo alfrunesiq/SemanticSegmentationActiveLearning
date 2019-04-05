@@ -109,13 +109,10 @@ class Cityscapes:
     def __init__(self, coarse=False):
 
         # Embedding from label image to train id
-        self._embedding = np.ones(256, dtype=np.uint8)*255
-        self._embedding_reversed = np.zeros(256, dtype=np.uint8)
-        self._colormap = np.ones((256,3), dtype=np.uint8)*255
-        for label in labels:
-            self._embedding[label.id] = label.trainId
-            self._embedding_reversed[label.trainId] = label.id
-            self._colormap[label.trainId] = label.color
+        # NOTE: defer creation untill usage to avoid memory usage
+        self._embedding = None
+        self._embedding_reversed = None
+        self._colormap = None
 
         # Number of training classes
         self._num_classes = 19
@@ -125,14 +122,26 @@ class Cityscapes:
 
     @property
     def colormap(self):
+        if self._colormap == None:
+            self._colormap = np.full((256,3), 255, dtype=np.uint8)
+            for label in reversed(labels):
+                self._colormap[label.trainId] = label.color
         return self._colormap
 
     @property
     def embedding(self):
+        if self._embedding == None:
+            self._embedding = np.full(256, 255, dtype=np.uint8)
+            for label in reversed(labels):
+                self._embedding[label.id] = label.trainId
         return self._embedding
 
     @property
     def embedding_reversed(self):
+        if self._embedding_reversed == None:
+            self._embedding_reversed = np.zeros(256, dtype=np.uint8)
+            for label in reversed(labels):
+                self._embedding_reversed[label.trainId] = label.id
         return self._embedding_reversed
 
     @property
@@ -224,7 +233,7 @@ class Cityscapes:
                 file_id = "_".join(label_id[:3])
 
                 image_path = os.path.join(root, filename)
-
+                _file_associations["test"][file_id] = {}
                 _file_associations["test"][file_id]["image"] = image_path
 
         return _file_associations

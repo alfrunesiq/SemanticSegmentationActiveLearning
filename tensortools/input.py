@@ -4,6 +4,9 @@ import logging
 import multiprocessing
 import os
 
+from functools import partial
+
+import numpy as np
 import tensorflow as tf
 from google.protobuf.json_format import MessageToJson
 
@@ -44,18 +47,17 @@ class InputStage:
     and possibly testset, as it is internally assumed that the output
     matches.
     """
-    def __init__(self, batch_size,
-                 input_shape=[512,512]):
+    def __init__(self, input_shape=[512,512], scope="Dataset"):
         """
         Initializes the @InputStage class
 
         :param record_fmt: dict with TFRecord layout mapping record keys
                            to tf.[Fixed|Var]LenFeature.
-        :param batch_size:  Batch size for the dataset pipeline
         :param input_shape: Input shape of the network
         """
         self.logger     = logging.getLogger(__name__)
-        self.name_scope = tf.name_scope("Dataset")
+        with tf.name_scope(scope) as _scope:
+            self.name_scope = _scope
 
         if len(input_shape) == 3:
             self.shape = input_shape
@@ -65,10 +67,11 @@ class InputStage:
             logger.warn("Proceeding with unknown inputshape.")
             self.shape = [None,None,None]
 
-        self.batch_size = batch_size
+        self.iterator   = None
         self.datasets   = {}
 
-    def add_dataset(self, name, file_patterns, epochs=1, augment=None, decode_fn=None):
+    def add_dataset(self, name, file_patterns, batch_size, epochs=1,
+                    parse_fn=None, decode_fn=None, augment=None):
         """
         Add a new dataset to the collection self.datasets dictionary.
 
@@ -79,165 +82,198 @@ class InputStage:
         :param name:          dataset identifier used to reference the data-
                               set for retrieving dataset/iterator
         :param file_patterns: file pattern glob to TFRecord files
-        :param augment:       Can either be
-                              a callable : this function is mapped after the
-                                           @decode_fn
-                              None       : leaves the images as is
-                              other      : applies default augmentation
-        :param decode_fn:     Optional custom decode function to decode the
-                              parsed TFRecord examples. The function takes a
-                              parsed example as argument.
+        :param batch_size:    Batch size for the dataset
+        :param parse_fn:      Parses TFRecord file, applied before @decode_fn
+        :param decode_fn:     Optional custom parse and decode function to
+                              read, parse and decode tfrecord files from
+                              input filepath.
+        :param augment:       (bool) Wheather to apply augmentation to
+                              default decoder. (requires decode_fn=None)
         """
         # make sure path is contained in a list
         if not isinstance(file_patterns, list):
             file_patterns = [file_patterns]
-
         # Count number of examples
         num_examples = 0
         for i in range(len(file_patterns)):
-            num_examples += len(glob.glob(pattern))
+            if os.path.isdir(file_patterns[i]):
+                # Use default glob
+                file_patterns[i] = os.path.join(file_patterns[i], "*.tfrecord")
+            num_examples += len(glob.glob(file_patterns[i]))
 
-        # Peek into a tfrecord to retrieve format and channel count
-        _record = next(glob.iglob(file_patterns[0]))
-        fmt = _peek_tfrecord(os.path.join(path[0],filenames[0]))
-        self.input_depths = {}
-
-        # Extract channel info for the input data
-        for key in fmt.keys():
-            _key = str(key)
-            scope = "/".join(_key.split("/")[:-1])
-            if _key.endswith("channels"):
-                self.input_depths[scope] = int(fmt[key]["int64List"]["value"][0])
-
-        # Create format specification from the fmt dictionary
-        tf_fmt = _example_from_format(fmt)
-        # Create parse function for extracting a tf.Example from the record
-        with self.name_scope:
+        with tf.name_scope(self.name_scope):
             with tf.name_scope(name):
-                # NOTE: tf.data.Dataset.list_files shuffles records_glob
-                records = tf.data.Dataset.list_files(file_patterns)
-                dataset = tf.data.TFRecordDataset(records)
-
+                # NOTE: tf.data.Dataset.list_files shuffles as well
+                dataset = tf.data.Dataset.list_files(file_patterns)
                 if epochs != 0:
                     dataset = dataset.repeat(epochs)
+                dataset = tf.data.TFRecordDataset(dataset)
 
-                # Parse TFRecord
-                parse_fn = lambda x: tf.io.parse_single_example(
-                                     x, tf_fmt, name="ParseExample")
-                dataset = dataset.map(parse_fn,
+                self._add_dataset(name, dataset, batch_size,
+                                  parse_fn, decode_fn, augment)
+
+        # Store number of elements in the dataset
+        self.datasets[name]["count"] = num_examples
+
+        return num_examples
+
+    def add_dataset_from_placeholders(self, name, filenames,
+                                      *aux_placeholders,
+                                      batch_size=8, parse_fn=None,
+                                      decode_fn=None, augment=None):
+        """
+        Creates dataset from placeholders.
+        DISCLAIMER: this function is callee shuffle; i.e. the dataset is
+                    "locked" to 1 epoch, and caller is responsible for
+                    shuffling the data at initialization.
+        :param filenames: tf.placeholder of 1D array of filenames.
+        :param *aux_placeholders: any auxillary placeholders fed parallel
+                                  with records dataset.
+        :param batch_size: batch size for each iterator call
+        :param parse_fn:   Parses TFRecord file, applied before @decode_fn
+        :param decode_fn:  (Optional) custom parse and decode function to
+                           read, parse and decode tfrecord files from
+                           input filepath.
+        :param augment:    (bool) Wheather to apply augmentation to
+                           default decoder. (requires decode_fn=None)
+        """
+        num_examples = filenames.shape.as_list()[0] # Might be None
+        with tf.name_scope(self.name_scope):
+            with tf.name_scope(name):
+                dataset = tf.data.TFRecordDataset(filenames,
+                                                  buffer_size=256*1024*1024)
+                if len(aux_placeholders) > 0:
+                    aux_datasets = [tf.data.Dataset.from_tensor_slices(ph) \
+                                    for ph in aux_placeholders]
+                    dataset = tf.data.Dataset.zip((dataset,) +
+                                                  tuple(aux_datasets))
+
+                self._add_dataset(name, dataset, batch_size,
+                                  parse_fn, decode_fn, augment)
+
+        self.datasets[name]["count"] = filenames.shape.as_list()[0]
+        return num_examples
+
+
+    def _add_dataset(self, name, dataset, batch_size, parse_fn=None,
+                     decode_fn=None, augment=None):
+        # Create parse function for extracting a tf.Example from the record
+        # Parse TFRecord
+        if parse_fn == None:
+            def parse_fn(path, *aux):
+                # Default parse function
+                fmt = {
+                    "image/channels":tf.io.FixedLenFeature((),tf.int64,-1),
+                    "image/data" : tf.io.FixedLenFeature((),tf.string,""),
+                    "label"      : tf.io.FixedLenFeature((),tf.string,""),
+                    "height"     : tf.io.FixedLenFeature((),tf.int64 ,-1),
+                    "width"      : tf.io.FixedLenFeature((),tf.int64 ,-1)
+                }
+                ret = tf.io.parse_single_example(
+                    path, fmt, name="ParseExample"), *aux
+                return ret
+
+        dataset = dataset.map(parse_fn,
+                              num_parallel_calls=_CPU_COUNT-1)
+        # Decode images
+        if decode_fn == None:
+            if augment == True:
+                decoder = partial(self.default_decoder,augment=True)
+                dataset = dataset.map(decoder,
                                       num_parallel_calls=_CPU_COUNT-1)
-                # Decode images
-                if decode_fn == None:
-                    if augment == None:
-                        decoder = lambda x: \
-                                  self._default_decoder(x, crop_and_split=True)
-                        dataset = dataset.map(decoder,
-                                              num_parallel_calls=_CPU_COUNT-1)
-                    else:
-                        dataset = dataset.map(self._default_decoder,
-                                              num_parallel_calls=_CPU_COUNT-1)
-                else:
-                    dataset = dataset.map(decode_fn,
-                                          num_parallel_calls=_CPU_COUNT-1)
-                # Data augmentation
-                if augment != None:
-                    if callable(augment):
-                        dataset = dataset.map(augment,
-                                              num_parallel_calls=_CPU_COUNT-1)
-                    else:
-                        dataset = dataset.map(self._default_augmentation,
-                                              num_parallel_calls=_CPU_COUNT-1)
+            else:
+                dataset = dataset.map(self.default_decoder,
+                                      num_parallel_calls=_CPU_COUNT-1)
+        else:
+            dataset = dataset.map(decode_fn,
+                                  num_parallel_calls=_CPU_COUNT-1)
 
-                # Batch and prefetch image/label data
-                if self.batch_size > 1:
-                    dataset = dataset.batch(self.batch_size)
-                dataset = dataset.prefetch(self.batch_size)
-                self.datasets[name] = {}
-                # Store dataset
-                self.datasets[name]["dataset"]  = dataset
-                # Store number of ticks in the iterator
-                self.datasets[name]["count"]    = \
-                    ((len(filenames) - 1) // self.batch_size) + 1
-                # Create [re-]initializable iterator
-                self.datasets[name]["iterator"] = \
-                    dataset.make_initializable_iterator()
-                # Add initialization op for this datset
-                self.datasets[name]["init"] = \
-                    self.datasets[name]["iterator"].initializer
-            # END scope @name
-        # END scope "Dataset"
-
-        return self.datasets[name]["count"]
+        # Batch and prefetch image/label data
+        if batch_size > 1:
+            dataset = dataset.batch(batch_size)
+        dataset = dataset.prefetch(batch_size)
+        self.datasets[name] = {}
+        # Store dataset
+        self.datasets[name]["dataset"]  = dataset
+        # Create [re-]initializable iterator
+        if self.iterator == None:
+            self.iterator = tf.data.Iterator.from_structure(
+                output_types=dataset.output_types,
+                output_shapes=dataset.output_shapes,
+                output_classes=dataset.output_classes
+            )
+        # Add initialization op for this datset
+        self.datasets[name]["init"] = \
+            self.iterator.make_initializer(dataset)
 
     def get_datset(self, name):
-        """
-        Convenience function to retrieve the dataset
-        :param name: dataset identifier specified when @add_dataset was
-                     called
-        :returns:    the datset
-        :rtype:      tf.data.Dataset
-        """
         return self.datasets[name]["dataset"]
 
-    def init_iterator(self, name, sess):
+    def init_iterator(self, name, sess, feed_dict=None):
         """
         Convenience function to initialize the iterator for the dataset
         referenced by @name.
         NOTE: iterating past the dataset raises tf.errors.OutOfRangeError
-        :param name: dataset identifier specified when @add_dataset was
-                     called
-        :param sess: an active tf.Session to run the initializer
+        :param name:      dataset identifier specified when @add_dataset
+                          was called
+        :param sess:      an active tf.Session to run the initializer
+        :param feed_dict: (Optional) feed_dict if dataset contains
+                          placeholders
         """
         # Fetch the iterator
         init_op = self.datasets[name]["init"]
         # Run the initializer
-        sess.run(init_op)
+        sess.run(init_op, feed_dict)
 
-    def get_output(self, name):
+    def get_output(self):
         """
         NOTE: need to run initializer
         """
-        return self.datasets[name]["iterator"].get_next()
+        return self.iterator.get_next()
 
-    def _default_decoder(self, example, crop_and_split=False):
+    def default_decoder(self, example, *other_outputs, augment=False):
         """
         Decodes all images in example and stacks all channels along with
         the decoded label image in the last channel.
 
         :param example: parsed example (tf.Example)
-        :returns: Stacked tensor with label image in last channel
+        :returns: Tensors of image, label and mask bypassing all
+                  additional upstream parser outputs.
         :rtype:   tf.Tensor
         """
-        images = []
-        channels = 0
+        # Decode image and label from raw record data
+        image = tf.image.decode_image(example["image/data"],
+                                      dtype=tf.uint8,
+                                      name="DecodeImage")
+        label = tf.cond(tf.math.not_equal(example["label"], ""),
+                        true_fn=lambda: tf.image.decode_png(example["label"],
+                                                            channels=1,
+                                                            dtype=tf.uint8,
+                                                            name="DecodeLabel"),
+                        false_fn=lambda: tf.fill(
+                            dims=[example["height"], example["width"], 1],
+                            value=tf.constant(255, dtype=tf.uint8,
+                                              name="Fill/value"),
+                            name="NoLabel"),
+                        name="Label"
+        )
+        channels = 3
         # Iterate over example keys and collect all images not label
-        for key in example:
-            if key.endswith("/data"):
-                scope = "/".join(key.split("/")[:-1])
-                with tf.name_scope(scope):
-                    image = tf.image.decode_image(example[key],
-                                                  dtype=tf.uint8,
-                                                  name="DecodeImage")
-                images.append(image)
-                channels += self.input_depths[scope]
         self.shape[-1] = channels
-        # Decode label image
-        label = tf.image.decode_png(example["label"], channels=1,
-                                    name="DecodeLabel")
         # Stack the images' channels and label image
-        image_stack = tf.concat(images+[label], axis=2, name="StackImages")
+        image_stack = tf.concat([image, label], axis=2, name="StackImages")
         # Need to recover channel dimension
         stack_shape = image_stack.shape.as_list()
         stack_shape[-1] = self.shape[-1]+1
         image_stack.set_shape(stack_shape)
 
-        if not crop_and_split:
-            return image_stack
+        if augment:
+            image, label, mask = self._default_augmentation(image_stack)
         else:
             # TODO: move this to a separate function "_default_no_augmentation"
             # Height and width need not be the same accross samples
-            stack_shape = tf.shape(image_stack)
-            center = [stack_shape[0]//2, stack_shape[1]//2]
+            center = [tf.cast(example["height"]//2, tf.int32),
+                      tf.cast(example["width"]//2, tf.int32)]
             top_left = [center[0]-self.shape[0]//2,
                         center[1]-self.shape[1]//2]
             crop = tf.image.crop_to_bounding_box(image_stack,
@@ -251,7 +287,8 @@ class InputStage:
                                                  name="ToFloat")
             # Generate mask of valid labels (and squeeze unary 3rd-dim)
             label, mask = generate_mask(label)
-            return image, label, mask
+        ret = image, label, mask, *other_outputs
+        return ret
 
     def _default_augmentation(self, images):
         """
@@ -266,8 +303,8 @@ class InputStage:
             crop_shape = self.shape
             crop_shape[-1] += 1
             # Random channelwise pixel intensity scaling
-            px_scaling = tf.random.uniform(shape=[channels], maxval=1.5,
-                                             minval=0.8, dtype=tf.float32)
+            px_scaling = tf.random.uniform(shape=[channels], maxval=1.4,
+                                           minval=0.8, dtype=tf.float32)
             # Crop out a sizable portion randomly
             image_crop = tf.random_crop(images, crop_shape,
                                         name="RandomCrop")
@@ -286,6 +323,83 @@ class InputStage:
             # Generate mask
             label, mask = generate_mask(label)
         return image, label, mask
+
+class NumpyCapsule:
+    def __init__(self, shuffle=True):
+        # Initialize internal state
+        self._setattr = True    # __setattr__ toggle ndarray tracking
+        self._feed_dict = {}    # internal feed_dict
+        self._placeholders = {} # placeholder dict map
+        self.shuffle = shuffle  # whether to shuffle feed_dict property
+        self._length = 0        # length tracker
+        self._cur_length = 0    # current length (changes on @set_indices)
+        self._indices = []      # indices of values used in feed_dict
+
+    @property
+    def feed_dict(self):
+        feed_dict = {}
+        if self.shuffle:
+            # Shuffles all values before returning
+            np.random.shuffle(self._indices)
+            for name in self._placeholders:
+                feed_dict[self._placeholders[name]] = \
+                    self._feed_dict[self._placeholders[name]][self._indices]
+        else:
+            feed_dict = self._feed_dict
+        return feed_dict
+
+    def set_indices(self, indices=None):
+        """
+        Manually set indeces to use subset of values.
+        :param indices: indices set of values to be used.
+        """
+        try:
+            self._setattr = False
+            if indices is None:
+                self._indices = np.arange(self._length)
+                self._cur_length = self._length
+            else:
+                self._indices = np.array(indices)
+                self._cur_length = len(self._indices)
+        finally:
+            self._setattr = True
+
+    def get_value(self, attribute):
+        """
+        Get value of the entry containing attribute.
+        :param attribute: attribute (placeholder) handle.
+        """
+        return self._feed_dict[attribute]
+
+    @property
+    def size(self):
+        return self._cur_length
+
+    def __setattr__(self, name, value):
+        if isinstance(value, np.ndarray) and self._setattr:
+            if name in self._placeholders:
+                # Cache array
+                self._feed_dict[name] = value
+            else:
+                # Create placeholder
+                self._placeholders[name] = tf.placeholder(
+                    value.dtype,
+                    shape=[None]*len(value.shape),
+                    name=name)
+                # Create feed_dict entry
+                self._feed_dict[self._placeholders[name]] = value
+
+            # NOTE: User is required to keep track of equal length arrays
+            if self._length != len(value):
+                self._length = len(value)
+                # Update internal indeces
+                self.set_indices(np.arange(self._length))
+            # Actually set attribute to placeholder
+            super(NumpyCapsule, self).__setattr__(name, self._placeholders[name])
+        else:
+            super(NumpyCapsule, self).__setattr__(name, value)
+
+
 
 def _peek_tfrecord(filepath):
     """

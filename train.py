@@ -42,20 +42,29 @@ def main(args):
     with tf.device("/device:CPU:0"):
         with tf.name_scope("Datasets"):
             # Setup input pipelines
-            input_stage = tt.input.InputStage(
-                    params["batch_size"],
-                    input_shape=[params["network"]["input"]["height"],
-                                 params["network"]["input"]["width"]])
+            train_input = tt.input.InputStage(
+                input_shape=[params["network"]["input"]["height"],
+                             params["network"]["input"]["width"]])
+            val_input   = tt.input.InputStage(
+                input_shape=[params["network"]["input"]["height"],
+                             params["network"]["input"]["width"]])
 
             # Add datasets
-            train_batches = input_stage.add_dataset("train", train_paths,
-                                                    epochs=1, augment=True)
-
-            val_batches   = input_stage.add_dataset("val", val_paths, epochs=1)
+            train_examples = train_input.add_dataset(
+                    "train", train_paths,
+                    batch_size=params["batch_size"],
+                    epochs=1, augment=True)
+            val_examples   = val_input.add_dataset(
+                    "val", val_paths,
+                    batch_size=params["batch_size"],
+                    epochs=1)
+            # Calculate number of batches
+            train_batches = (train_examples-1)//params["batch_size"] + 1
+            val_batches   = (val_examples - 1)//params["batch_size"] + 1
 
             # Get iterator outputs
-            train_image, train_label, train_mask = input_stage.get_output("train")
-            val_image, val_label, val_mask = input_stage.get_output("val")
+            train_image, train_label, train_mask = train_input.get_output()
+            val_image, val_label, val_mask = val_input.get_output()
 
         # Create step variables
         with tf.variable_scope("StepCounters"):
@@ -134,7 +143,7 @@ def main(args):
                     decay_rate=hparams["learning_rate_decay"])
 
             # Create optimization procedure
-            optimizer = tf.train.AdamOptimizer(learning_rate)
+            optimizer = tf.train.AdamOptimizer(learning_rate, **hparams["optimizer"]["kwargs"])
 
             # Create training op
             train_op  = optimizer.minimize(cost, global_step=local_step,
@@ -189,11 +198,12 @@ def main(args):
                             val_metric_summaries["ConfusionMat"],
                             tf.summary.image("Input", val_image),
                             tf.summary.image("Label", tf.gather(
-                                colormap, tf.cast(val_label, tf.int32))),
+                                colormap, tf.cast(val_label + 255*(1-val_mask),
+                                                  tf.int32))),
                             tf.summary.image("Predictions", tf.gather(
                                 colormap, tf.cast(val_pred, tf.int32)))
                         ], name="EpochSummaries"
-                       )
+                    )
     if not os.path.exists(args.log_dir):
         os.makedirs(args.log_dir)
         # Dump parameter configuration (args)
@@ -287,8 +297,8 @@ def main(args):
                                   ascii=True,
                                   dynamic_ncols=True)
             # Initialize input stage
-            input_stage.init_iterator("train", sess)
-            input_stage.init_iterator("val", sess)
+            train_input.init_iterator("train", sess)
+            val_input.init_iterator("val", sess)
             # Initialize or update validation network
             sess.run(update_val_op)
             # Reset for another round
@@ -344,7 +354,7 @@ def main(args):
             _iter = tqdm.tqdm(_iter, desc="val[%3d/%3d]" % (params["epochs"],
                                                             params["epochs"]))
         # Re initialize network
-        input_stage.init_iterator("val", sess)
+        val_input.init_iterator("val", sess)
         sess.run(update_val_op)
         for i in _iter:
             try:
