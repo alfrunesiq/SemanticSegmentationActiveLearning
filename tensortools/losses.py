@@ -66,7 +66,7 @@ def masked_softmax_cross_entropy(
         # errors severe for high resolution images
         loss = tf.cast(loss, tf.float64)
         # Divide by mean denominator
-        loss = loss / tf.reduce_sum(_mask)
+        loss = loss / tf.cast(tf.reduce_sum(_mask), tf.float64)
         # Compute scalar mean loss
         loss = tf.math.reduce_sum(loss, name="MeanCrossEntropy")
     return loss

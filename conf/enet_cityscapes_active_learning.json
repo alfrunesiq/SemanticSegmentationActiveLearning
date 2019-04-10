@@ -32,5 +32,26 @@
             "height" : 512,
             "width"  : 1024
         }
+    },
+    "active_learning": {
+        "__doc__" : [
+            "Parameters specific to the self-supervised active learning",
+            "script `active_learning.py`.",
+            "iteration - how many major iterations (-1 consume all data)",
+            "num_initially_labelled - of the labelled dataset; how many should",
+            "                         be assumed labelled (-1 remaining non-",
+            "                         validation examples with label)",
+            "num_validation - how many labelled examples to use for validation",
+            "selection_size - how many examples to annotate each iteration",
+            "measure - kind of confidence measure {entropy,margin,confidence}",
+            "threshold - parameter for thresholding confidence image for",
+            "            pseudo labelling process"
+        ],
+        "iterations"             : 55,
+        "num_initially_labelled" : 50,
+        "num_validation"         : 270,
+        "selection_size"         : 50,
+        "measure"                : "entropy",
+        "threshold"              : 0.95
     }
 }

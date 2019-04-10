@@ -38,8 +38,9 @@ EPSILON = np.finfo(np.float32).tiny
 
 def main(args, logger):
     # Retrieve training parameters for convenience
-    params  = args.params           # All parameters
-    hparams = params["hyperparams"] # Hyperparamters
+    params   = args.params               # All parameters
+    hparams  = params["hyperparams"]     # Hyperparamters
+    alparams = params["active_learning"] # Active learning parameters
     state = None # State dict
     # Define state and config filenames
     state_filename  = os.path.join(args.log_dir, "state.json")
@@ -71,9 +72,9 @@ def main(args, logger):
         # Resolve example filenames
         train_val_examples = np.sort(np.array(glob.glob(train_examples_glob)))
         # Pick examples from training set to use for validation
-        val_examples   = train_val_examples[:args.num_val]
+        val_examples   = train_val_examples[:alparams["num_validation"]]
         # Use the rest as training examples
-        train_examples = train_val_examples[args.num_val:]
+        train_examples = train_val_examples[alparams["num_validation"]:]
 
         # Use annotated test set, NOTE: cityscapes validation set
         test_examples  = np.array(glob.glob(test_examples_glob))
@@ -82,7 +83,12 @@ def main(args, logger):
         train_indices  = np.arange(len(train_examples), dtype=np.int32)
         np.random.shuffle(train_indices)
 
-        # Possibly add actual unlabelled examples
+        initially_labelled = alparams["num_initially_labelled"]
+        if initially_labelled < 0:
+            # Use rest of labelled examples
+            initially_labelled = len(train_examples)
+
+        # Possibly add actually unlabelled examples
         no_label_indices = np.empty(0, dtype=str)
         if args.unlabelled is not None:
             no_label_glob     = os.path.join(args.unlabelled, "*.tfrecord")
@@ -94,8 +100,8 @@ def main(args, logger):
                                             no_label_examples)
             train_indices = np.concatenate((train_indices, no_label_indices))
 
-        labelled = train_indices[:args.initially_labelled]
-        unlabelled = train_indices[args.initially_labelled:]
+        labelled = train_indices[:initially_labelled]
+        unlabelled = train_indices[initially_labelled:]
         del train_indices
 
         # Setup initial state
@@ -230,7 +236,7 @@ def main(args, logger):
 
             # Configure on-line high confidence pseudo labeling.
             pseudo_prob   = tf.nn.softmax(pseudo_logits, axis=-1, name="TrainProb")
-            if args.measure == "entropy":
+            if alparams["measure"] == "entropy":
                 # Reduce entropy over last dimension.
                 # Compute prediction entropy
                 entropy = - pseudo_prob * tf.math.log(pseudo_prob+EPSILON)
@@ -242,11 +248,11 @@ def main(args, logger):
                 entropy = entropy / log_base
                 # Convert entropy to confidence
                 pseudo_confidence = 1.0 - entropy
-            elif args.measure == "margin":
+            elif alparams["measure"] == "margin":
                 # Difference between the two largest entries in last dimension.
                 values, indices = tf.math.top_k(pseudo_prob, k=2)
                 pseudo_confidence = values[:,:,:,0] - values[:,:,:,1]
-            elif args.measure == "confidence":
+            elif alparams["measure"] == "confidence":
                 # Reduce max over last dimension.
                 pseudo_confidence = tf.math.reduce_max(pseudo_prob, axis=-1)
             else:
@@ -255,7 +261,7 @@ def main(args, logger):
                 tf.cast(pseudo_confidence, tf.float64),
                 axis=(1,2))
             # Pseudo annotate high-confidence unlabeled example pixels
-            pseudo_mask = tf.where(tf.math.less(pseudo_confidence, args.threshold),
+            pseudo_mask = tf.where(tf.math.less(pseudo_confidence, alparams["threshold"]),
                                    tf.zeros_like(pseudo_label,
                                                  dtype=train_label.dtype),
                                    tf.ones_like(pseudo_label,
@@ -582,6 +588,7 @@ def main(args, logger):
                                 if _initial_grace_period < 0:
                                     no_improvement_count += 1
                                 if no_improvement_count >= params["epochs"]:
+                                    _iter.close()
                                     break
                             # Pop fetches to prohibit OutOfRangeError due to
                             # asymmetric train-/val- input size.
@@ -652,7 +659,8 @@ def main(args, logger):
             # Filter out labelled examples
             unlabelled_confidence = confidence[unlabelled]
 
-            selection_size = np.minimum(len(unlabelled), args.selection_size)
+            selection_size = np.minimum(len(unlabelled),
+                                        alparams["selection_size"])
             # Get the lowest confidence indices of unlabelled subset
             example_indices = np.argpartition(unlabelled_confidence,
                                               selection_size)
@@ -665,7 +673,14 @@ def main(args, logger):
         # Only add graph to first event file
         _graph = sess.graph if checkpoint_path == None else None
         with tf.summary.FileWriter(args.log_dir, graph=_graph) as test_writer:
-            while state["iteration"] < args.iterations:
+            iterations = alparams["iterations"]
+            if iterations < 0:
+                # Iterate untill all data is consumed
+                iterations = np.ceil(len(unlabelled)
+                                     / float(alparams["selection_size"]))
+                logger.info("Iteration count: %d" % iterations)
+
+            while state["iteration"] < iterations:
                 # Step 1: train_loop
 
                 train_input.set_indices(labelled)
@@ -814,53 +829,6 @@ def parse_arguments():
         dest="params",
         metavar="PARAM_FILE",
         help="Path to parameter configuration file, see conf subdirectory."
-    )
-    req_group.add_argument(
-        "-K", "--example-selection",
-        required=True,
-        type=int,
-        dest="selection_size",
-        metavar="SELECTION_SIZE",
-        help="How many examples to annotate at each major iteration."
-    )
-    req_group.add_argument(
-        "-N", "--major-iterations",
-        required=True,
-        type=int,
-        dest="iterations",
-        metavar="ITERATIONS",
-        help="How many outer iterations to run active learning."
-    )
-    req_group.add_argument(
-        "-I", "--initially-labelled",
-        required=True,
-        type=int,
-        dest="initially_labelled",
-        metavar="NUM_LABELLED",
-        help="How many examples to are annotated initially."
-    )
-    req_group.add_argument(
-        "-V", "--validation-set",
-        required=True,
-        type=int,
-        dest="num_val",
-        metavar="NUM_VALIDATION",
-        help="How many examples to include in the validation set."
-    )
-    req_group.add_argument(
-        "-M", "--measure",
-        required=True,
-        type=str,
-        choices=["entropy", "margin", "confidence"],
-        dest="measure",
-        help="High confidence measure for pseudo labeling and thresholding."
-    )
-    req_group.add_argument(
-        "-T", "--confidence-threshold",
-        required=True,
-        type=float,
-        dest="threshold",
-        help="Threshold for pseudo labeling process."
     )
     #Optional arguments
     opt_parser = argparse.ArgumentParser(add_help=False)
