@@ -18,13 +18,23 @@ try:
 except ImportError:
     pass
 
+try:
+    import tkinter
+    tkinter.Tk().withdraw()
+except ImportError:
+    if args.unlabelled == None:
+        pass
+    else:
+        raise ImportError("Could not import tkinter, make sukre Tk "
+                          "dependencies are installed")
+
 # User includes
 import models
 import datasets
 import tensortools as tt
 
 # Lowest representable float32
-EPSILON = np.finfo(np.float32).min
+EPSILON = np.finfo(np.float32).tiny
 
 def main(args, logger):
     # Retrieve training parameters for convenience
@@ -57,26 +67,47 @@ def main(args, logger):
     train_examples_glob = os.path.join(args.data_dir, "train", "*.tfrecord")
 
     if not os.path.exists(state_filename):
+        # Initialize state
+        # Resolve example filenames
         train_val_examples = np.sort(np.array(glob.glob(train_examples_glob)))
+        # Pick examples from training set to use for validation
         val_examples   = train_val_examples[:args.num_val]
+        # Use the rest as training examples
         train_examples = train_val_examples[args.num_val:]
+
+        # Use annotated test set, NOTE: cityscapes validation set
         test_examples  = np.array(glob.glob(test_examples_glob))
 
         # Draw random train examples and mark as annotated
         train_indices  = np.arange(len(train_examples), dtype=np.int32)
         np.random.shuffle(train_indices)
-        has_label = train_indices[:args.initially_labelled]
-        no_label  = train_indices[args.initially_labelled:]
+
+        # Possibly add actual unlabelled examples
+        no_label_indices = np.empty(0, dtype=str)
+        if args.unlabelled is not None:
+            no_label_glob     = os.path.join(args.unlabelled, "*.tfrecord")
+            no_label_examples = glob.glob(no_label_glob)
+            no_label_indices  = np.arange(
+                len(train_indices), len(train_indices)+len(no_label_examples)
+            )
+            train_examples = np.concatenate(train_examples,
+                                            no_label_examples)
+            train_indices = np.concatenate((train_indices, no_label_indices))
+
+        labelled = train_indices[:args.initially_labelled]
+        unlabelled = train_indices[args.initially_labelled:]
         del train_indices
+
         # Setup initial state
         state = {
             "checkpoint" : None, # Keep track of latest checkpoint.
             "iteration"  : 0,
             "dataset" : {
                 "train" : {
-                    "filenames" : list(train_examples),
-                    "has_label" : has_label.tolist(),
-                    "no_label"  : no_label.tolist()
+                    "filenames"  : list(train_examples),
+                    "labelled"   : labelled.tolist(),
+                    "unlabelled" : unlabelled.tolist(),
+                    "no_label"   : no_label_indices.tolist()
                 },
                 "val"   : {
                     "filenames" : list(val_examples)
@@ -87,21 +118,23 @@ def main(args, logger):
             }
         }
         with open(state_filename, "w+") as f:
-            json.dump(state, f, indent=4)
+            json.dump(state, f, indent=2)
 
     else:
+        # Load state
         with open(state_filename, "r") as f:
             state = json.load(f)
         # Extract filename properties
-        train_examples = np.array(state["dataset"]["train"]["filenames"])
-        val_examples   = np.array(state["dataset"]["val"]["filenames"])
-        test_examples  = np.array(state["dataset"]["test"]["filenames"])
-        has_label = np.array(state["dataset"]["train"]["has_label"])
-        no_label  = np.array(state["dataset"]["train"]["no_label"])
+        train_examples   = np.array(state["dataset"]["train"]["filenames"])
+        val_examples     = np.array(state["dataset"]["val"]["filenames"])
+        test_examples    = np.array(state["dataset"]["test"]["filenames"])
+        labelled         = np.array(state["dataset"]["train"]["labelled"])
+        unlabelled       = np.array(state["dataset"]["train"]["unlabelled"])
+        no_label_indices = np.array(state["dataset"]["train"]["no_label"])
 
     # TODO dump this into log dir, and dump modified version in log subdirs
-    train_input_has_label = np.full_like(train_examples, False, dtype=bool)
-    train_input_has_label[has_label] = True
+    train_input_labelled = np.full_like(train_examples, False, dtype=bool)
+    train_input_labelled[labelled] = True
     train_input_indices = np.arange(len(train_examples))
 
     with tf.device("/device:CPU:0"):
@@ -109,9 +142,9 @@ def main(args, logger):
             # Create input placeholders
             train_input = tt.input.NumpyCapsule()
             train_input.filenames = train_examples
-            train_input.has_label = train_input_has_label
+            train_input.labelled = train_input_labelled
             train_input.indices   = train_input_indices
-            # train_input.set_indices(has_label)
+            # train_input.set_indices(labelled)
 
             val_input = tt.input.NumpyCapsule()
             val_input.filenames = val_examples
@@ -130,7 +163,7 @@ def main(args, logger):
             # Add datasets
             train_input_stage.add_dataset_from_placeholders(
                 "train", train_input.filenames,
-                train_input.has_label, train_input.indices,
+                train_input.labelled, train_input.indices,
                 batch_size=params["batch_size"],
                 augment=True)
             # Validation set
@@ -146,7 +179,7 @@ def main(args, logger):
             test_batches  = (len(test_examples) - 1)//params["batch_size"] + 1
 
             # Get iterator outputs
-            train_image, train_label, train_mask, train_has_label, train_index \
+            train_image, train_label, train_mask, train_labelled, train_index \
                                                = train_input_stage.get_output()
             val_image, val_label, val_mask = val_input_stage.get_output()
 
@@ -156,7 +189,7 @@ def main(args, logger):
                                       trainable=False, name="GlobalStep")
             local_step  = tf.Variable(0, dtype=tf.int64,
                                       trainable=False, name="LocalStep")
-            global_step_op = global_step + local_step
+            global_step_op = tf.assign_add(global_step, local_step)
             epoch_step  = tf.Variable(0, trainable=False, name="EpochStep")
             epoch_step_inc = tf.assign_add(epoch_step, 1)
 
@@ -181,57 +214,64 @@ def main(args, logger):
     with tf.device("/device:GPU:0"):
         # Build graph for training
         train_logits  = train_net(train_image, training=True)
-        # Build ops one more time without dropout.
-        pseudo_logits = train_net(train_image, training=False)
-        # Just make sure not to propagate gradients a second time.
-        pseudo_logits = tf.stop_gradient(pseudo_logits)
         # Compute predictions: use @train_pred for metrics and
         # @pseudo_label for pseudo_annotation process.
         train_pred    = tf.math.argmax(train_logits, axis=-1,
                                        name="TrainPredictions")
-        pseudo_label  = tf.math.argmax(pseudo_logits, axis=-1,
-                                       name="TrainPredictions")
-        pseudo_label = tf.cast(pseudo_label, tf.uint8)
+
+        with tf.name_scope("PseudoAnnotation"):
+            # Build ops one more time without dropout.
+            pseudo_logits = train_net(train_image, training=False)
+            # Just make sure not to propagate gradients a second time.
+            pseudo_logits = tf.stop_gradient(pseudo_logits)
+            pseudo_label  = tf.math.argmax(pseudo_logits, axis=-1,
+                                           name="TrainPredictions")
+            pseudo_label = tf.cast(pseudo_label, tf.uint8)
+
+            # Configure on-line high confidence pseudo labeling.
+            pseudo_prob   = tf.nn.softmax(pseudo_logits, axis=-1, name="TrainProb")
+            if args.measure == "entropy":
+                # Reduce entropy over last dimension.
+                # Compute prediction entropy
+                entropy = - pseudo_prob * tf.math.log(pseudo_prob+EPSILON)
+                entropy = tf.math.reduce_sum(entropy, axis=-1)
+                # Convert logarithm base to units of number of classes
+                # NOTE this will make the metric independent of number of
+                #      classes as well the range in [0,1]
+                log_base = tf.math.log(np.float32(dataset.num_classes))
+                entropy = entropy / log_base
+                # Convert entropy to confidence
+                pseudo_confidence = 1.0 - entropy
+            elif args.measure == "margin":
+                # Difference between the two largest entries in last dimension.
+                values, indices = tf.math.top_k(pseudo_prob, k=2)
+                pseudo_confidence = values[:,:,:,0] - values[:,:,:,1]
+            elif args.measure == "confidence":
+                # Reduce max over last dimension.
+                pseudo_confidence = tf.math.reduce_max(pseudo_prob, axis=-1)
+            else:
+                raise NotImplementedError("Uncertainty function not implemented.")
+            pseudo_mean_confidence = tf.reduce_mean(
+                tf.cast(pseudo_confidence, tf.float64),
+                axis=(1,2))
+            # Pseudo annotate high-confidence unlabeled example pixels
+            pseudo_mask = tf.where(tf.math.less(pseudo_confidence, args.threshold),
+                                   tf.zeros_like(pseudo_label,
+                                                 dtype=train_label.dtype),
+                                   tf.ones_like(pseudo_label,
+                                                dtype=train_label.dtype))
+            # Pseudo annotation logic (think of it as @tf.cond maped 
+            # over batch dimension)
+            train_label = tf.where(train_labelled, train_label,
+                                   pseudo_label, name="MaybeGenLabel")
+            train_mask  = tf.where(train_labelled, train_mask,
+                                   pseudo_mask, name="MaybeGenMask")
+
     with tf.device("/device:GPU:1"):
         # Build validation network.
         val_logits = val_net(val_image, training=False)
         val_pred   = tf.math.argmax(val_logits, axis=-1,
                                     name="ValidationPredictions")
-
-    # Configure on-line high confidence pseudo labeling.
-    pseudo_prob   = tf.nn.softmax(pseudo_logits, axis=-1, name="TrainProb")
-    if args.measure == "entropy":
-        # Reduce entropy over last dimension.
-        log_base = tf.math.log(np.float32(dataset.num_classes))
-        pseudo_confidence = - pseudo_prob * tf.math.log(pseudo_prob+EPSILON)
-        # Convert logarithm base to units of number of classes
-        pseudo_confidence = pseudo_confidence / log_base
-        # Convert entropy to confidence
-        pseudo_confidence = 1.0 - pseudo_confidence
-        pseudo_confidence = tf.math.reduce_sum(pseudo_confidence, axis=-1)
-    elif args.measure == "margin":
-        # Difference between the two largest entries in last dimension.
-        values, indices = tf.math.top_k(pseudo_prob, k=2)
-        pseudo_confidence = values[:,:,:,0] - values[:,:,:,1]
-    elif args.measure == "confidence":
-        # Reduce max over last dimension.
-        pseudo_confidence = tf.math.reduce_max(pseudo_prob, axis=-1)
-    else:
-        raise NotImplementedError("Uncertainty function not implemented.")
-    pseudo_mean_confidence = tf.reduce_mean(
-        tf.cast(pseudo_confidence, tf.float64),
-        axis=(1,2))
-    # Pseudo annotate high-confidence unlabeled example pixels
-    pseudo_mask = tf.where(tf.math.less(pseudo_confidence, args.threshold),
-                           tf.zeros_like(pseudo_label,
-                                         dtype=train_label.dtype),
-                           tf.ones_like(pseudo_label,
-                                        dtype=train_label.dtype))
-    # Pseudo annotation logic
-    train_label = tf.where(train_has_label, train_label,
-                           pseudo_label, name="MaybeGenLabel")
-    train_mask  = tf.where(train_has_label, train_mask,
-                           pseudo_mask, name="MaybeGenMask")
 
     # Build cost function
     with tf.name_scope("Cost"):
@@ -356,6 +396,7 @@ def main(args, logger):
     # Create session with soft device placement
     #     - some ops neet to run on the CPU
     sess_config = tf.ConfigProto(allow_soft_placement=True)
+    sess_config.gpu_options.allow_growth = True
     with tf.Session(config=sess_config) as sess:
         logger.debug("Initializing variables...")
         sess.run(tf.global_variables_initializer())
@@ -437,37 +478,51 @@ def main(args, logger):
         }
 
         # Train loop (until convergence) -> Pick unlabeled examples -> test_loop
-        def train_loop(summary_writer):
+        def train_loop(summary_writer, sample_unlabelled=0):
             """
             Train loop closure.
             Runs training loop untill no improvement is seen in
             @params["epochs"] epochs before returning.
             """
-            best_ckpt            = state["checkpoint"]
-            no_improvement_count = 0
-            best_mean_iou        = 0.0
-            log_subdir           = summary_writer.get_logdir()
-            run_name             = os.path.basename(log_subdir)
-            checkpoint_prefix    = os.path.join(log_subdir, "model")
-            num_iter_per_epoch   = np.maximum(train_input.size,
+            _initial_grace_period = 50 # How many epoch until counting @no_improvement
+            best_ckpt             = state["checkpoint"]
+            no_improvement_count  = 0
+            best_mean_iou         = 0.0
+            log_subdir            = summary_writer.get_logdir()
+            run_name              = os.path.basename(log_subdir)
+            checkpoint_prefix     = os.path.join(log_subdir, "model")
+            num_iter_per_epoch    = np.maximum(train_input.size,
                                               val_input.size)
             while no_improvement_count < params["epochs"]:
+                _initial_grace_period -= 1
+                # Increment in-graph epoch counter.
                 epoch = sess.run(epoch_step_inc)
 
+                # Prepare inner loop iterator
                 _iter = range(0, num_iter_per_epoch, params["batch_size"])
-                _iter = tqdm.tqdm(_iter, desc="%s[%d]" % (run_name, epoch),
-                                  dynamic_ncols=True,
-                                  postfix={"NIC" : no_improvement_count})
+                if show_progress:
+                    _iter = tqdm.tqdm(_iter, desc="%s[%d]" % (run_name, epoch),
+                                      dynamic_ncols=True,
+                                      ascii=True,
+                                      postfix={"NIC" : no_improvement_count})
 
+                # Initialize iterators
                 train_input_stage.init_iterator(
                     "train", sess, train_input.feed_dict)
                 val_input_stage.init_iterator(
                     "val", sess, val_input.feed_dict)
 
+                # Reset confusion matrices
+                train_metrics.reset_metrics(sess)
+                val_metrics.reset_metrics(sess)
+
+                # Prepare iteration fetches
                 _fetches = {
                     "train" : {"iteration" : fetches["train"]["iteration"]},
                     "val"   : {"iteration" : fetches["val"]["iteration"]}
                 }
+                # Update validation network weights
+                sess.run(update_val_op)
 
                 try:
                     for i in _iter:
@@ -515,14 +570,17 @@ def main(args, logger):
                                 # Update checkpoint file used for
                                 # @tf.train.latest_checkpoint to point at
                                 # current best.
-                                if epoch > 1:
-                                    best_ckpt = ckpt_manager.commit(
-                                        checkpoint_prefix, sess)
+                                _ckpt_name = ckpt_manager.commit(
+                                    checkpoint_prefix, sess)
+                                if _ckpt_name != "":
+                                    best_ckpt = _ckpt_name
                                 # Reset counter
                                 no_improvement_count = 0
                             else:
-                                # Result has not improved, increment counter.
-                                no_improvement_count += 1
+                                # Result has not improved, increment counter,
+                                # if grace period is over.
+                                if _initial_grace_period < 0:
+                                    no_improvement_count += 1
                                 if no_improvement_count >= params["epochs"]:
                                     break
                             # Pop fetches to prohibit OutOfRangeError due to
@@ -535,8 +593,6 @@ def main(args, logger):
 
                 summary_writer.flush()
                 ckpt_manager.cache(sess)
-
-                sess.run(update_val_op)
             # END while no_improvement_count < params["epochs"]
             return best_ckpt
 
@@ -544,13 +600,16 @@ def main(args, logger):
             """
             Test loop closure.
             """
-            _step = len(has_label)
+            _step = len(labelled)
             # Initialize validation input stage with test set
             val_input_stage.init_iterator("test", sess, test_input.feed_dict)
             _iter = range(0, test_input.size, params["batch_size"])
-            _iter = tqdm.tqdm(_iter, desc="test[%d]" % (_step),
-                              dynamic_ncols=True)
+            if show_progress:
+                _iter = tqdm.tqdm(_iter, desc="test[%d]" % (_step),
+                                  ascii=True,
+                                  dynamic_ncols=True)
             summary_proto = None
+            val_metrics.reset_metrics(sess)
             try:
                 for i in _iter:
                     # Accumulate confusion matrix
@@ -576,8 +635,10 @@ def main(args, logger):
             train_input_stage.init_iterator("train", sess,
                                             train_input.feed_dict)
             _iter = range(0, train_input.size, params["batch_size"])
-            _iter = tqdm.tqdm(_iter, desc="ranking[%d]" % len(has_label),
-                              dynamic_ncols=True)
+            if show_progress:
+                _iter = tqdm.tqdm(_iter, desc="ranking[%d]" % len(labelled),
+                                  ascii=True,
+                                  dynamic_ncols=True)
             try:
                 for i in _iter:
                     # Loop over all examples and compute confidence
@@ -589,30 +650,37 @@ def main(args, logger):
                 pass
 
             # Filter out labelled examples
-            unlabelled_confidence = confidence[no_label]
+            unlabelled_confidence = confidence[unlabelled]
 
-            selection_size = np.minimum(len(no_label), args.selection_size)
+            selection_size = np.minimum(len(unlabelled), args.selection_size)
             # Get the lowest confidence indices of unlabelled subset
             example_indices = np.argpartition(unlabelled_confidence,
                                               selection_size)
             example_indices = example_indices[:selection_size]
             # Convert to indices into all filenames list
-            example_indices = no_label[example_indices]
+            example_indices = unlabelled[example_indices]
             return example_indices
 
         checkpoint_path = state["checkpoint"]
-        with tf.summary.FileWriter(args.log_dir, graph=sess.graph) as test_writer:
+        # Only add graph to first event file
+        _graph = sess.graph if checkpoint_path == None else None
+        with tf.summary.FileWriter(args.log_dir, graph=_graph) as test_writer:
             while state["iteration"] < args.iterations:
                 # Step 1: train_loop
+
+                train_input.set_indices(labelled)
                 if state["iteration"] == 0:
                     # Pretrain
                     log_subdir = os.path.join(args.log_dir, "pretrain")
                     # Only use labelled subset
-                    train_input.set_indices(has_label)
                 else:
                     # Any other iteration
                     log_subdir = os.path.join(args.log_dir, "iter-%d" %
                                               state["iteration"])
+                    # Sample from the unlabelled set 
+                    #TODO: make proportion parametrizable
+                    train_input.set_sample_size(np.minimum(len(unlabelled), 
+                                                           len(labelled)))
 
                 # Create subdir if it doesn't exist
                 if not os.path.exists(log_subdir):
@@ -620,14 +688,18 @@ def main(args, logger):
 
                 # Change checkpoint manager directory
                 ckpt_manager.chdir(log_subdir)
-
                 with tf.summary.FileWriter(log_subdir) as train_val_writer:
                     # Enter train loop
-                    checkpoint_path = train_loop(train_val_writer)
+                    try:
+                        checkpoint_path = train_loop(train_val_writer)
+                    except KeyboardInterrupt as exception:
+                        # Quickly store state
+                        state["checkpoint"] = ckpt_manager.latest_checkpoint
+                        with open(state_filename, "w") as f:
+                            json.dump(state, f, indent=2)
+                            f.truncate()
+                        raise exception
 
-                if state["iteration"] == 0:
-                    # Reset train_input to use all examples
-                    train_input.set_indices()
 
                 # Reload best checkpoint
                 status = checkpoint.restore(checkpoint_path)
@@ -638,30 +710,69 @@ def main(args, logger):
                 test_loop(test_writer)
 
                 # Step 3: Find low confidence examples
-                example_indices = rank_confidence()
+                # Reset train_input to use all examples for ranking
+                train_input.set_indices()
+                low_conf_examples = rank_confidence()
+
+                # (maybe) Pause for user to annotate
+                to_annotate_indices = no_label_indices[np.isin(
+                    no_label_indices, low_conf_examples)]
+
+                while len(to_annotate_indices) > 0:
+                    to_annotate = train_examples[to_annotate_indices]
+                    # Poll user for filenames of annotated examples
+                    logger.info("Please annotate the following examples:\n%s" %
+                                "\n".join(to_annotate_basename.tolist()))
+                    filenames = tkinter.filedialog.askopenfilename(
+                        multiple=1,
+                        filetypes=(("TFRecord", "*.tfrecord"),))
+
+                    hit = [] # List of matching filename indices
+                    for filename in filenames:
+                        basename = os.path.basename(filename)
+                        idx = -1
+                        for i in range(len(to_annotate)):
+                            if to_annotate[i].endswith(basename):
+                                idx = i
+                                break
+                        if idx != -1:
+                            # Update state filenames
+                            train_examples[to_annotate_indices[idx]] = filename
+                            hit.append(idx)
+                        else:
+                            logger.info("Unrecognized filepath: %s" % filename)
+                    # Remove matched paths
+                    to_annotate_indices = np.delete(to_annotate_indices, hit)
+
+
+                # Remove annotated examples from unlabelled set
+                no_label_indices = no_label_indices[np.isin(no_label_indices,
+                                                             low_conf_examples,
+                                                             invert=True)]
+
 
                 logger.info(
                     "Moving following examples to labelled set:\n%s" %
-                    train_examples[example_indices]
+                    "\n".join(train_examples[low_conf_examples].tolist())
                 )
                 # First make the update to input stage before
                 # commiting state change
-                train_input_has_label[example_indices] = True
-                train_input.has_label = train_input_has_label
+                train_input_labelled[low_conf_examples] = True
+                train_input.labelled = train_input_labelled
 
-                # (Option) Pause for user to annotate
 
                 # Step 4: Update state information
-                has_label = np.append(has_label, example_indices)
-                no_label = no_label[np.isin(no_label, example_indices,
+                labelled = np.append(labelled, low_conf_examples)
+                unlabelled = unlabelled[np.isin(unlabelled, low_conf_examples,
                                             assume_unique=True, invert=True)]
-                state["dataset"]["train"]["has_label"] = has_label.tolist()
-                state["dataset"]["train"]["no_label"] = no_label.tolist()
+                state["dataset"]["train"]["filenames"] = train_examples.tolist()
+                state["dataset"]["train"]["labelled"] = labelled.tolist()
+                state["dataset"]["train"]["unlabelled"] = unlabelled.tolist()
                 state["iteration"] += 1
                 state["checkpoint"] = checkpoint_path
                 # Dump updated state
                 with open(state_filename, "w") as f:
-                    json.dump(state, f, indent=4)
+                    json.dump(state, f, indent=2)
                     f.truncate()
     return 0
 
@@ -759,6 +870,14 @@ def parse_arguments():
         dest="checkpoint", required=False,
         metavar="CHECKPOINT",
         help="Path to pretrained checkpoint directory or model."
+    )
+    opt_parser.add_argument(
+        "-u", "--unlabelled-dir",
+        type=str,
+        default=None,
+        dest="unlabelled",
+        metavar="UNLABELLED_GLOB",
+        help="Path to directory containing only feature data."
     )
 
     # Create parser hierarchy

@@ -35,7 +35,10 @@ class CheckpointManager(object):
         """
 
         if self._cached_checkpoint == None:
-            return
+            if len(self._checkpoints) > 0:
+                return self._checkpoints[-1]
+            else:
+                return ""
 
         if len(self._checkpoints) == self._max_to_keep:
             for filename in self._get_checkpoint_filenames(
@@ -64,6 +67,7 @@ class CheckpointManager(object):
         # Update checkpoint state file (@tf.train.latest_checkpoint)
         checkpoint_management.update_checkpoint_state_internal(
                 self._directory, self._checkpoints[-1], self._checkpoints)
+        return filename_prefix
 
     def chdir(self, directory):
         self._directory = directory
@@ -77,6 +81,13 @@ class CheckpointManager(object):
                     self._cached_checkpoint):
                 os.remove(filename)
             self._cached_checkpoint = None
+
+    @property
+    def latest_checkpoint(self):
+        if len(self._checkpoints) > 0:
+            return self._checkpoints[-1]
+        else:
+            return ""
 
     def save(self, prefix, session):
         checkpoint_name = self._checkpoint.save(prefix, session)

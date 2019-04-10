@@ -334,18 +334,30 @@ class NumpyCapsule:
         self._length = 0        # length tracker
         self._cur_length = 0    # current length (changes on @set_indices)
         self._indices = []      # indices of values used in feed_dict
+        self._full_range = []   # all possible indices
+        self._sample_set = []   # treat the difference of @_indices and
+                                # @_full_range as sample set
+        self._sample_size = 0
 
     @property
     def feed_dict(self):
         feed_dict = {}
         if self.shuffle:
             # Shuffles all values before returning
-            np.random.shuffle(self._indices)
+            indices = self._indices.copy()
+            if self._sample_size > 0:
+                rand_indices = np.random.choice(self._sample_set, 
+                                                self._sample_size,
+                                                replace=False)
+                indices = np.concatenate((indices, rand_indices))
+            np.random.shuffle(indices)
             for name in self._placeholders:
                 feed_dict[self._placeholders[name]] = \
-                    self._feed_dict[self._placeholders[name]][self._indices]
+                    self._feed_dict[self._placeholders[name]][indices]
         else:
-            feed_dict = self._feed_dict
+            for name in self._placeholders:
+                feed_dict[self._placeholders[name]] = \
+                        self._feed_dict[self._indices]
         return feed_dict
 
     def set_indices(self, indices=None):
@@ -356,13 +368,22 @@ class NumpyCapsule:
         try:
             self._setattr = False
             if indices is None:
-                self._indices = np.arange(self._length)
+                self._indices = self._full_range
                 self._cur_length = self._length
+                self._sample_set = []
+                self._sample_size = 0
             else:
-                self._indices = np.array(indices)
+                self._indices = indices
                 self._cur_length = len(self._indices)
+                self._sample_set = self._full_range[np.isin(self._full_range, 
+                                                            self._indices, 
+                                                            invert=True)]
         finally:
             self._setattr = True
+
+    def set_sample_size(self, size):
+        self._sample_size = size
+        return self._sample_size
 
     def get_value(self, attribute):
         """
@@ -373,10 +394,10 @@ class NumpyCapsule:
 
     @property
     def size(self):
-        return self._cur_length
+        return self._cur_length + self._sample_size
 
     def __setattr__(self, name, value):
-        if isinstance(value, np.ndarray) and self._setattr:
+        if isinstance(value, np.ndarray) and not name.startswith("_"):
             if name in self._placeholders:
                 # Cache array
                 self._feed_dict[name] = value
@@ -393,7 +414,8 @@ class NumpyCapsule:
             if self._length != len(value):
                 self._length = len(value)
                 # Update internal indeces
-                self.set_indices(np.arange(self._length))
+                self._full_range = np.arange(self._length)
+                self.set_indices()
             # Actually set attribute to placeholder
             super(NumpyCapsule, self).__setattr__(name, self._placeholders[name])
         else:

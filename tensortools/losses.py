@@ -58,14 +58,17 @@ def masked_softmax_cross_entropy(
             name="SoftmaxCrossEntropy")
         # Apply mask / weighting
         loss = tf.math.multiply(loss, _mask)
-        # Do the mean in two takes: first in batch dimension,
-        # then spatial with higher precission
-        loss = tf.reduce_mean(loss, axis=0, name="BatchMeanCrossEntropy")
+        # Do the meae in two takes: sum over batch dimension,
+        # then divide by mask/weight sum and reduce over spatial 
+        # dimension with higher precission.
+        loss = tf.reduce_sum(loss, axis=0, name="BatchMeanCrossEntropy")
         # Cast to float64, spatial dimensions can make the numeric
-        # errors can be severe for high resolution images
+        # errors severe for high resolution images
         loss = tf.cast(loss, tf.float64)
+        # Divide by mean denominator
+        loss = loss / tf.reduce_sum(_mask)
         # Compute scalar mean loss
-        loss = tf.math.reduce_mean(loss, name="MeanCrossEntropy")
+        loss = tf.math.reduce_sum(loss, name="MeanCrossEntropy")
     return loss
 
 def multiscale_masked_softmax_cross_entropy(
