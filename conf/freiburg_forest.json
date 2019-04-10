@@ -1,6 +1,6 @@
 {
     "batch_size" : 8,
-    "epochs"     : 25,
+    "epochs"     : 100,
     "hyperparams" : {
         "__doc__" : [
             "Training hyperparameters"
@@ -18,9 +18,9 @@
             "glorot_scaling" : false
         },
         "softmax" : {
-            "label_smoothing"    : 0.0,
+            "label_smoothing"    : 0.05,
             "loginverse_scaling" : 0.0,
-            "multiscale"         : true
+            "multiscale"         : false
         }
     },
     "network": {
@@ -29,8 +29,8 @@
         ],
         "model" : "ENet",
         "input" : {
-            "height" : 512,
-            "width"  : 1024
+            "height" : 432,
+            "width"  : 648
         }
     }
 }

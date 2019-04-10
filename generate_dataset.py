@@ -1,6 +1,3 @@
-"""
-NOTE: THIS DOES NOT WORK!!!
-"""
 import argparse
 import multiprocessing
 import os
@@ -35,8 +32,6 @@ key|  |val: encoding
    |  |
    |  |
 """
-
-
 def generator_from_file_associations(file_associations):
     data_types = file_associations[next(file_associations.__iter__())]
     def generator():
@@ -58,11 +53,11 @@ def read_images(keys, paths, dataset, width=None):
     def decode_encode_data(arg):
         # Unpack arg
         key, path = arg
-        
-        def _center_crop(image, image_shape, aspect_ratio, 
+
+        def _center_crop(image, image_shape, aspect_ratio,
                          aspect_old, print_warning):
             # Calculate width
-            width = tf.floor(aspect_ratio * tf.cast(image_shape[0], 
+            width = tf.floor(aspect_ratio * tf.cast(image_shape[0],
                                                     tf.float64))
             width = tf.cast(width, tf.int32)
             # Define slice start and endpoints
@@ -72,9 +67,9 @@ def read_images(keys, paths, dataset, width=None):
                 # Print debug info
                 print_op = tf.print(
                     tf.strings.format("Exmaple: {} with aspect ratio {} is "
-                        "center croped to aspect {}\nImage size: {} -> {}\n", 
-                        (paths[0], aspect_old, 
-                         width / image_shape[0], 
+                        "center croped to aspect {}\nImage size: {} -> {}\n",
+                        (paths[0], aspect_old,
+                         width / image_shape[0],
                          image_shape[:2], shape[:2])),
                     output_stream=tf.logging.warning)
                 # Crop image to slice (and run @print_op)
@@ -98,7 +93,7 @@ def read_images(keys, paths, dataset, width=None):
                 aspect_ratio = label_shape[1] / label_shape[0]
                 label, label_shape  = tf.cond(
                         tf.greater(aspect_ratio, args.aspect),
-                        true_fn=lambda: _center_crop(label, label_shape, 
+                        true_fn=lambda: _center_crop(label, label_shape,
                                                      args.aspect,
                                                      aspect_ratio, False),
                         false_fn=lambda: (label, label_shape)
@@ -138,7 +133,7 @@ def read_images(keys, paths, dataset, width=None):
                 aspect_ratio = image_shape[1] / image_shape[0]
                 image, image_shape  = tf.cond(
                         tf.greater(aspect_ratio, args.aspect),
-                        true_fn=lambda: _center_crop(image, image_shape, 
+                        true_fn=lambda: _center_crop(image, image_shape,
                                                      args.aspect,
                                                      aspect_ratio, True),
                         false_fn=lambda: (image, image_shape)
@@ -176,7 +171,7 @@ def read_images(keys, paths, dataset, width=None):
             default=_image_fun)
         return encoding, shape
     # Loop over keys and paths
-    encodings, shapes = tf.map_fn(decode_encode_data, 
+    encodings, shapes = tf.map_fn(decode_encode_data,
                                   (keys, paths),
                                   dtype=(tf.string, tf.int32))
     return keys, paths, encodings, shapes
@@ -208,7 +203,7 @@ def write_serialized_example(keys, paths, encodings, shapes, output_dir):
             feature[b"label"] = _bytes_feature(encodings[i])
             aspect_ratio = shapes[i][1] / shapes[i][0]
             if aspect_ratio > 2.0:
-                tf.logging.error("%s: example aspect ratio: %1.02f" 
+                tf.logging.error("%s: example aspect ratio: %1.02f"
                                  % (paths[0].decode("ascii"), aspect_ratio))
         else:
             feature[keys[i] + b"/channels"] = \
@@ -217,7 +212,7 @@ def write_serialized_example(keys, paths, encodings, shapes, output_dir):
                     _bytes_feature(encodings[i])
             feature[keys[i] + b"/encoding"] = \
                     _bytes_feature(paths[i].decode("ascii").split(".")[-1])
-            
+
     example = tf.train.Example(features=tf.train.Features(feature=feature))
     filename = paths[0] + b".tfrecord"
     filename = os.path.join(output_dir, filename)
@@ -238,13 +233,15 @@ def main(args):
     tf.logging.set_verbosity(tf.logging.ERROR)
     dataset = None
     if args.dataset.lower() == "cityscapes":
-        dataset = datasets.Cityscapes()
+        dataset = datasets.Cityscapes(args.use_coarse)
     elif args.dataset.lower() == "freiburg":
-        dataset = datasets.Freiburg()
+        dataset = datasets.Freiburg(args.modalities)
     elif args.dataset.lower() == "vistas":
         dataset = datasets.Vistas()
+    elif args.dataset.lower() == "generic":
+        dataset = datasets.Generic(args.image_dir, args.label_dir)
     else:
-        raise ValueError("Dataset \"%s\" not supported.")
+        raise ValueError("Dataset \"%s\" not supported." % args.dataset)
 
     if not os.path.exists(args.output_dir):
         sys.stdout.write("Directory \"%s\" does not exist. "
@@ -258,6 +255,7 @@ def main(args):
             os.makedirs(args.output_dir)
 
     file_associations = dataset.file_associations(args.data_dir)
+    print(file_associations)
     sess = tf.Session()
     for split in file_associations:
         # Create path to split
@@ -276,7 +274,7 @@ def main(args):
         _tf_write_serialized_example = lambda x, y, z, u: \
                 tf_write_serialized_example(x, y, z, u, split_path)
         # Map the above functions
-        tf_dataset = tf_dataset.map(_read_images, 
+        tf_dataset = tf_dataset.map(_read_images,
                 num_parallel_calls=_NUM_CPUS-1)
         tf_dataset = tf_dataset.map(_tf_write_serialized_example,
                 num_parallel_calls=_NUM_CPUS-1)
@@ -285,7 +283,7 @@ def main(args):
         _iter = tf_dataset.make_one_shot_iterator()
         _next = _iter.get_next()
         # Run over all examples
-        with tqdm.tqdm(total=len(file_associations[split]), 
+        with tqdm.tqdm(total=len(file_associations[split]),
                        ascii=" #",
                        desc="%-6s" % split,
                        dynamic_ncols=True) as pbar:
@@ -310,7 +308,8 @@ if __name__ == "__main__":
                         type=str,
                         dest="dataset",
                         required=True,
-                        help="Name of the dataset {cityscapes,freiburg,kitti}.")
+                        help="Name of the dataset "
+                             "{cityscapes,freiburg,vistas,generic}.")
     parser.add_argument("-o", "--output_dir",
                         type=str,
                         dest="output_dir",
@@ -329,14 +328,30 @@ if __name__ == "__main__":
                         required=False,
                         help="Downscaling factor.")
     # TODO: make this a little nicer
-    parser.add_argument(
-        "-e", "--extra", type=str, nargs="*",
-        dest="extra", required=False,
-        help="Extra arguments. This is dependent on the particular dataset "
-        "selected with the \"-t\" flag.\n"
-        "%-10s : {gtCoarse} - coarsely annotated dataset.\n"
-        "%-10s : {nir,nir_gray,depth_gray,(etc)} - additional modalities."
-        % ("cityscapes", "freiburg"))
+    parser.add_argument("--use-coarse",
+        action="store_true",
+        dest="use_coarse",
+        default=False,
+        help="(Cityscapes) Use coarse annotation set."
+    )
+    parser.add_argument("--modalities",
+        nargs="*",
+        type=str,
+        dest="modalities",
+        default=None,
+        help="(Freiburg) list of modalities to use."
+    )
+    parser.add_argument("-i", "--image-dir",
+        type=str,
+        dest="image_dir",
+        default=None,
+        help="(Generic) Image subdirectory under data root for generic dataset"
+    )
+    parser.add_argument("-l", "--label-dir",
+        type=str,
+        dest="label_dir",
+        default=None,
+        help="(Generic) Label subdirectory under data root for generic dataset"
+    )
     args = parser.parse_args()
     main(args)
-
