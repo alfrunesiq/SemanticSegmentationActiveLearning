@@ -52,8 +52,8 @@
         "iterations"                  : 55,
         "num_initially_labelled"      : 50,
         "num_validation"              : 270,
-        "pseudo_labelling_proportion" : 0.5,
-        "selection_size"              : 50,
+        "pseudo_labelling_proportion" : 0,
+        "selection_size"              : -50,
         "measure"                     : "entropy",
         "threshold"                   : 0.95
     }

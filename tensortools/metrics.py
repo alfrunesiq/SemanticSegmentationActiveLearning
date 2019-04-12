@@ -121,11 +121,11 @@ class Metrics:
             for i in range(self.nclasses):
                 class_acc  = tf.summary.scalar(
                     "Class_%d_Accuracy" % i,
-                    metrics["ClassAccuracy"][i], 
+                    metrics["ClassAccuracy"][i],
                     family="ClassMetrics")
                 class_prec = tf.summary.scalar(
                     "Class_%d_Precission" % i,
-                    metrics["ClassPrecission"][i], 
+                    metrics["ClassPrecission"][i],
                     family="ClassMetrics")
                 class_rec  = tf.summary.scalar(
                     "Class_%d_Recall" % i,

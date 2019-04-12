@@ -42,16 +42,19 @@
             "                         be assumed labelled (-1 remaining non-",
             "                         validation examples with label)",
             "num_validation - how many labelled examples to use for validation",
+            "pseudo_labelling_proportion - proportion of unlabelled examples to",
+            "                              use for training.",
             "selection_size - how many examples to annotate each iteration",
             "measure - kind of confidence measure {entropy,margin,confidence}",
             "threshold - parameter for thresholding confidence image for",
             "            pseudo labelling process"
         ],
-        "iterations"             : -1,
-        "num_initially_labelled" : -1,
-        "num_validation"         : 170,
-        "selection_size"         : 50,
-        "measure"                : "entropy",
-        "threshold"              : 0.95
+        "iterations"                  : -1,
+        "num_initially_labelled"      : -1,
+        "num_validation"              : 170,
+        "pseudo_labelling_proportion" : 0.5,
+        "selection_size"              : 50,
+        "measure"                     : "entropy",
+        "threshold"                   : 0.95
     }
 }

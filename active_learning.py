@@ -150,7 +150,6 @@ def main(args, logger):
             train_input.filenames = train_examples
             train_input.labelled = train_input_labelled
             train_input.indices   = train_input_indices
-            # train_input.set_indices(labelled)
 
             val_input = tt.input.NumpyCapsule()
             val_input.filenames = val_examples
@@ -499,7 +498,8 @@ def main(args, logger):
             checkpoint_prefix     = os.path.join(log_subdir, "model")
             num_iter_per_epoch    = np.maximum(train_input.size,
                                               val_input.size)
-            while no_improvement_count < params["epochs"]:
+            while no_improvement_count < params["epochs"] \
+                    and _initial_grace_period >= 0:
                 _initial_grace_period -= 1
                 # Increment in-graph epoch counter.
                 epoch = sess.run(epoch_step_inc)
@@ -583,11 +583,10 @@ def main(args, logger):
                                 # Reset counter
                                 no_improvement_count = 0
                             else:
-                                # Result has not improved, increment counter,
-                                # if grace period is over.
-                                if _initial_grace_period < 0:
-                                    no_improvement_count += 1
-                                if no_improvement_count >= params["epochs"]:
+                                # Result has not improved, increment counter.
+                                no_improvement_count += 1
+                                if no_improvement_count >= params["epochs"] and \
+                                   _initial_grace_period < 0:
                                     _iter.close()
                                     break
                             # Pop fetches to prohibit OutOfRangeError due to
@@ -682,8 +681,8 @@ def main(args, logger):
 
             while state["iteration"] < iterations:
                 # Step 1: train_loop
-
                 train_input.set_indices(labelled)
+
                 if state["iteration"] == 0:
                     # Pretrain
                     log_subdir = os.path.join(args.log_dir, "pretrain")
@@ -692,10 +691,11 @@ def main(args, logger):
                     # Any other iteration
                     log_subdir = os.path.join(args.log_dir, "iter-%d" %
                                               state["iteration"])
-                    # Sample from the unlabelled set 
-                    #TODO: make proportion parametrizable
-                    train_input.set_sample_size(np.minimum(len(unlabelled), 
-                                                           len(labelled)))
+                    # Sample from the unlabelled set
+                    p = alparams["pseudo_labelling_proportion"]
+                    sample_size = int(len(labelled)*p/(1-p))
+                    sample_size = np.minimum(sample_size, len(unlabelled))
+                    train_input.set_sample_size(sample_size)
 
                 # Create subdir if it doesn't exist
                 if not os.path.exists(log_subdir):
@@ -709,7 +709,8 @@ def main(args, logger):
                         checkpoint_path = train_loop(train_val_writer)
                     except KeyboardInterrupt as exception:
                         # Quickly store state
-                        state["checkpoint"] = ckpt_manager.latest_checkpoint
+                        if ckpt_manager.latest_checkpoint != "":
+                            state["checkpoint"] = ckpt_manager.latest_checkpoint
                         with open(state_filename, "w") as f:
                             json.dump(state, f, indent=2)
                             f.truncate()
@@ -727,7 +728,12 @@ def main(args, logger):
                 # Step 3: Find low confidence examples
                 # Reset train_input to use all examples for ranking
                 train_input.set_indices()
-                low_conf_examples = rank_confidence()
+                if alparams["selection_size"] > 0:
+                    low_conf_examples = rank_confidence()
+                else:
+                    # Draw examples randomly
+                    low_conf_examples = np.random.choice(
+                        unlabelled, np.abs(alparams["selection_size"]))
 
                 # (maybe) Pause for user to annotate
                 to_annotate_indices = no_label_indices[np.isin(
