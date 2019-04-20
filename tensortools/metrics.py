@@ -9,19 +9,13 @@ class Metrics:
         self.nclasses = num_classes
 
         with tf.variable_scope("Eval") as _scope:
-
-            # Flatten labels and predictions
-            labels_ = tf.reshape(labels     , [-1])
-            pred_   = tf.reshape(predictions, [-1])
-            mask_   = tf.reshape(mask       , [-1])
-
             # Create global confusion matrix (should be reset every epoch)
             self._confusion_mat = tf.Variable(
                 tf.zeros(shape=[self.nclasses, self.nclasses],
                          dtype=tf.int64),
                 name="ConfusionMat", trainable=False)
-            batch_confusion_mat = self._intrnl_confusion_mat(
-                labels_, pred_, self.nclasses, weights=mask_,
+            batch_confusion_mat = confusion_mat(
+                labels, predictions, self.nclasses, weights=mask,
                 dtype=tf.int32, name="BatchConfusionMat")
             self._confusion_mat_update_op = tf.assign_add(
                 self._confusion_mat, tf.cast(batch_confusion_mat, tf.int64),
@@ -229,4 +223,36 @@ class Metrics:
         metrics["ConfusionMat"]    = confusion_mat
         return metrics
 
-__all__ = ["Eval"]
+def confusion_mat(labels, predictions, num_classes,
+                          weights=None, dtype=tf.int32, name="ConfusionMat"):
+    """
+    Had to reimplement the tf.confusion_matrix function as the
+    unneeded assertion operators takes an unnecessary amount of time.
+    :param labels:      1D tensor of ground trurth labels
+    :param predictions: 1D tensor of predictions (argmax)
+    :param num_classes: total number of classes
+    :param dtype:       dtype of the returned values
+    :param name:        name of the scope of the operations
+    :returns: Confusion matrix
+    :rtype:   tf.Tensor
+    """
+    with tf.name_scope(name):
+        _labels       = tf.cast(labels, tf.int32)
+        _labels_      = tf.reshape(_labels,[-1])
+        _predictions  = tf.cast(predictions, tf.int32)
+        _predictions_ = tf.reshape(_predictions,[-1])
+        if weights is not None:
+            _weights  = tf.cast(weights, dtype)
+            _weights_ = tf.reshape(_weights,[-1])
+        else:
+            _weights_ = None
+        shape = [num_classes,num_classes]
+        flat_shape = num_classes*num_classes
+        conf_mat_ = tf.math.bincount(num_classes*_labels_ + _predictions_, 
+                                     weights=_weights_, 
+                                     minlength=flat_shape, 
+                                     maxlength=flat_shape, 
+                                     dtype=dtype)
+        confusion_mat = tf.reshape(conf_mat_, shape, name="ConfusionMat")
+    return confusion_mat
+__all__ = ["Eval", "confusion_mat"]

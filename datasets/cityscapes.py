@@ -112,6 +112,7 @@ class Cityscapes:
         # NOTE: defer creation untill usage to avoid memory usage
         self._embedding = None
         self._embedding_reversed = None
+        self._name_embedding = None
         self._colormap = None
 
         # Number of training classes
@@ -122,7 +123,7 @@ class Cityscapes:
 
     @property
     def colormap(self):
-        if self._colormap == None:
+        if self._colormap is None:
             self._colormap = np.full((256,3), 255, dtype=np.uint8)
             for label in reversed(labels):
                 self._colormap[label.trainId] = label.color
@@ -130,15 +131,24 @@ class Cityscapes:
 
     @property
     def embedding(self):
-        if self._embedding == None:
+        if self._embedding is None:
             self._embedding = np.full(256, 255, dtype=np.uint8)
             for label in reversed(labels):
                 self._embedding[label.id] = label.trainId
         return self._embedding
 
     @property
+    def name_embedding(self):
+        if self._name_embedding is None:
+            self._name_embedding = []
+            for label in labels:
+                if label.trainId != 255:
+                    self._name_embedding.append(label.name)
+        return self._name_embedding
+
+    @property
     def embedding_reversed(self):
-        if self._embedding_reversed == None:
+        if self._embedding_reversed is None:
             self._embedding_reversed = np.zeros(256, dtype=np.uint8)
             for label in reversed(labels):
                 self._embedding_reversed[label.trainId] = label.id

@@ -36,7 +36,7 @@ def masked_softmax_cross_entropy(
         # Generate one-hot labels
         _labels_oh   = tf.one_hot(_labels, num_classes,
                                   on_value, off_value,
-                                  axis=3,
+                                  axis=-1,
                                   dtype=tf.float32,
                                   name="LabelsOneHot")
         _labels_oh = tf.stop_gradient(_labels_oh)

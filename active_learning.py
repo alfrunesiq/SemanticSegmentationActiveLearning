@@ -353,14 +353,33 @@ def main(args, logger):
                                       family="Losses")
                 ], name="IterationSummaries"
                )
+
             with tf.control_dependencies([metric_update_op]):
                 train_summary_epoch = tf.summary.merge(
                     [
                         # Summaries run at epoch boundaries.
                         metric_summaries["Metrics"],
-                        metric_summaries["ConfusionMat"],
+                        metric_summaries["ConfusionMat"]
                     ], name="EpochSummaries"
                    )
+
+            train_image_summary = tf.summary.merge(
+                [
+                    tf.summary.image(
+                        "PseudoLabel/input",
+                        train_input,
+                        family="PseudoLabel"
+                    ),
+                    tf.summary.image(
+                        "PseudoLabel", 
+                        tf.gather(dataset.colormap,
+                                  tf.cast(pseudo_label*pseudo_mask \
+                                  + (1 - pseudo_mask)*255,
+                                  tf.int32)),
+                        family="PseudoLabel"
+                    )
+                ]
+            )
         # Create metric evaluation and summaries
         with tf.device("/device:GPU:1"):
             with tf.name_scope("ValidationTestMetrics"):
@@ -395,7 +414,8 @@ def main(args, logger):
                     test_summary_epoch = tf.summary.merge([
                         val_metric_summary,
                         val_image_summary
-                        ])
+                        ]
+                    )
     # END name_scope("Summary")
 
     # Create session with soft device placement
@@ -427,6 +447,8 @@ def main(args, logger):
                 status = checkpoint.restore(ckpt)
                 status.assert_existing_objects_matched()
                 status.initialize_or_restore(sess)
+                if args.reinitialize_output:
+                    sess.run(train_net.Final.kernel.initializer)
 
             elif state["checkpoint"] != None:
                 # Try to restore from checkpoint in logdir
@@ -460,7 +482,8 @@ def main(args, logger):
                 },
                 "epoch"     : {
                     "step"     : epoch_step,
-                    "summary"  : train_summary_epoch
+                    "summary"  : train_summary_epoch,
+                    "summary/image" : train_image_summary
                 }
             },
             "val"   : { # Validation and test fetches
@@ -491,15 +514,15 @@ def main(args, logger):
             """
             _initial_grace_period = 50 # How many epoch until counting @no_improvement
             best_ckpt             = state["checkpoint"]
-            no_improvement_count  = 0
             best_mean_iou         = 0.0
             log_subdir            = summary_writer.get_logdir()
             run_name              = os.path.basename(log_subdir)
             checkpoint_prefix     = os.path.join(log_subdir, "model")
             num_iter_per_epoch    = np.maximum(train_input.size,
                                               val_input.size)
+            no_improvement_count = 0
             while no_improvement_count < params["epochs"] \
-                    and _initial_grace_period >= 0:
+                or _initial_grace_period >= 0:
                 _initial_grace_period -= 1
                 # Increment in-graph epoch counter.
                 epoch = sess.run(epoch_step_inc)
@@ -510,7 +533,7 @@ def main(args, logger):
                     _iter = tqdm.tqdm(_iter, desc="%s[%d]" % (run_name, epoch),
                                       dynamic_ncols=True,
                                       ascii=True,
-                                      postfix={"NIC" : no_improvement_count})
+                                      postfix={"NIC": no_improvement_count})
 
                 # Initialize iterators
                 train_input_stage.init_iterator(
@@ -555,7 +578,13 @@ def main(args, logger):
                                 )
                                 # Pop fetches to prohibit OutOfRangeError due to
                                 # asymmetric train-/val- input size.
+                                if results["train"]["epoch"]["step"] % 100 == 0:
+                                    summary_writer.add_summary(
+                                        results["train"]["epoch"]["summary/image"],
+                                        results["train"]["epoch"]["step"]
+                                    )
                                 _fetches.pop("train")
+
                         if "val" in results.keys() and \
                            "epoch" in results["val"].keys():
                             # Add summaries to event log.
@@ -589,6 +618,8 @@ def main(args, logger):
                                    _initial_grace_period < 0:
                                     _iter.close()
                                     break
+                            if show_progress:
+                                _iter.set_postfix(NIC=no_improvement_count)
                             # Pop fetches to prohibit OutOfRangeError due to
                             # asymmetric train-/val- input size.
                             _fetches.pop("val")
@@ -723,7 +754,9 @@ def main(args, logger):
                 sess.run(update_val_op)
 
                 # Step 2: test_loop
-                test_loop(test_writer)
+                if test_input.size > 0:
+                    # This step may be omitted on deployment
+                    test_loop(test_writer)
 
                 # Step 3: Find low confidence examples
                 # Reset train_input to use all examples for ranking
@@ -844,6 +877,12 @@ def parse_arguments():
         dest="checkpoint", required=False,
         metavar="CHECKPOINT",
         help="Path to pretrained checkpoint directory or model."
+    )
+    opt_parser.add_argument(
+        "-r", "--reinitialize-output-layer",
+        action="store_true",
+        dest="reinitialize_output", required=False,
+        help="Reinitialize last layer of model (if checkpoint specified)."
     )
     opt_parser.add_argument(
         "-u", "--unlabelled-dir",
