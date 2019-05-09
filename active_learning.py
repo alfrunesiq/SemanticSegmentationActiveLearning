@@ -184,8 +184,8 @@ def main(args, logger):
             test_batches  = (len(test_examples) - 1)//params["batch_size"] + 1
 
             # Get iterator outputs
-            train_image, train_label, train_mask, train_labelled, train_index \
-                                               = train_input_stage.get_output()
+            train_image_raw, train_image, train_label, train_mask, \
+                train_labelled, train_index = train_input_stage.get_output()
             val_image, val_label, val_mask = val_input_stage.get_output()
 
         # Create step variables
@@ -199,14 +199,14 @@ def main(args, logger):
             epoch_step_inc = tf.assign_add(epoch_step, 1)
 
     # Build training- and validation network
-    regularization = {}
+    regularization = {"drop_rates": hparams["dropout_rates"]}
     if hparams["weight_reg"]["L2"] > 0.0 \
        or hparams["weight_reg"]["L1"] > 0.0:
         regularization = {
             "weight_regularization" : tf.keras.regularizers.l1_l2(
                                           l1=hparams["weight_reg"]["L1"],
                                           l2=hparams["weight_reg"]["L2"]),
-            "regularization_scaling" : hparams["weight_reg"]["glorot_scaling"]
+            "regularization_scaling" : hparams["weight_reg"]["glorot_scaling"],
         }
 
     # Initialize networks
@@ -226,7 +226,7 @@ def main(args, logger):
 
         with tf.name_scope("PseudoAnnotation"):
             # Build ops one more time without dropout.
-            pseudo_logits = train_net(train_image, training=False)
+            pseudo_logits = train_net(train_image_raw, training=False)
             # Just make sure not to propagate gradients a second time.
             pseudo_logits = tf.stop_gradient(pseudo_logits)
             pseudo_label  = tf.math.argmax(pseudo_logits, axis=-1,
@@ -283,7 +283,6 @@ def main(args, logger):
         with tf.device("/device:GPU:0"):
             # Establish loss function
             if hparams["softmax"]["multiscale"]:
-                #FIXME: can't use train_label / train_mask here
                 loss, loss_weights = \
                     tt.losses.multiscale_masked_softmax_cross_entropy(
                         train_label,
@@ -367,7 +366,12 @@ def main(args, logger):
                 [
                     tf.summary.image(
                         "PseudoLabel/input",
-                        train_input,
+                        train_image_raw,
+                        family="PseudoLabel"
+                    ),
+                    tf.summary.image(
+                        "PseudoLabel/confidence",
+                        tf.expand_dims(pseudo_confidence, axis=-1),
                         family="PseudoLabel"
                     ),
                     tf.summary.image(
@@ -416,6 +420,9 @@ def main(args, logger):
                         val_image_summary
                         ]
                     )
+        conf_summary_ph = tf.placeholder(tf.float64, shape=[None])
+        conf_summary = tf.summary.histogram("ConfidenceDistribution",
+                                            conf_summary_ph)
     # END name_scope("Summary")
 
     # Create session with soft device placement
@@ -506,13 +513,14 @@ def main(args, logger):
         }
 
         # Train loop (until convergence) -> Pick unlabeled examples -> test_loop
-        def train_loop(summary_writer, sample_unlabelled=0):
+        def train_loop(summary_writer):
             """
             Train loop closure.
             Runs training loop untill no improvement is seen in
             @params["epochs"] epochs before returning.
             """
-            _initial_grace_period = 50 # How many epoch until counting @no_improvement
+            # How many epoch until counting @no_improvement
+            _initial_grace_period = alparams["epochs/warm_up"]
             best_ckpt             = state["checkpoint"]
             best_mean_iou         = 0.0
             log_subdir            = summary_writer.get_logdir()
@@ -696,8 +704,8 @@ def main(args, logger):
                                               selection_size)
             example_indices = example_indices[:selection_size]
             # Convert to indices into all filenames list
-            example_indices = unlabelled[example_indices]
-            return example_indices
+            low_conf_examples = unlabelled[example_indices]
+            return low_conf_examples, unlabelled_confidence
 
         checkpoint_path = state["checkpoint"]
         # Only add graph to first event file
@@ -762,11 +770,21 @@ def main(args, logger):
                 # Reset train_input to use all examples for ranking
                 train_input.set_indices()
                 if alparams["selection_size"] > 0:
-                    low_conf_examples = rank_confidence()
+                    low_conf_examples, unlabelled_conf = rank_confidence()
+                    # TODO: add summary here
+                    _hist_summary = sess.run(conf_summary,
+                                             {conf_summary_ph: 
+                                              unlabelled_conf})
+                    test_writer.add_summary(_hist_summary, state["iteration"])
                 else:
                     # Draw examples randomly
-                    low_conf_examples = np.random.choice(
-                        unlabelled, np.abs(alparams["selection_size"]))
+                    selection_size = np.minimum(alparams["selection_size"],
+                                                len(unlabelled.tolist()))
+                    if selection_size != 0:
+                        low_conf_examples = np.random.choice(
+                            unlabelled, np.abs(alparams["selection_size"]))
+                    else:
+                        low_conf_examples = []
 
                 # (maybe) Pause for user to annotate
                 to_annotate_indices = no_label_indices[np.isin(

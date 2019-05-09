@@ -5,6 +5,7 @@
         "__doc__" : [
             "Training hyperparameters"
         ],
+        "dropout_rates"       : [0.01, 0.1, 0.1, 0.1, 0.1],
         "learning_rate"       : 5e-4,
         "learning_rate_decay" : 0.0,
         "optimizer"           : {

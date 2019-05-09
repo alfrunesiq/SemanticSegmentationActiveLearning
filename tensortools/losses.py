@@ -45,23 +45,25 @@ def masked_softmax_cross_entropy(
         _mask = mask
         if mask.dtype != tf.float32:
             _mask = tf.cast(mask, dtype=tf.float32)
-        if weight > 1.0: # ENet type mask weighting
-            p_class = tf.reduce_sum(tf.nn.softmax(logits) * _labels_oh, axis=-1)
-            # NOTE: second term in denominator below ensures lower bound is 1
-            w_class = tf.math.divide(
-                    1.0, tf.math.log(weight + (_EULER-weight)*p_class)
-            )
-            _mask = _mask * w_class
 
         loss = tf.nn.softmax_cross_entropy_with_logits_v2(
             labels=_labels_oh, logits=logits, axis=-1,
             name="SoftmaxCrossEntropy")
         # Apply mask / weighting
         loss = tf.math.multiply(loss, _mask)
-        # Do the meae in two takes: sum over batch dimension,
+
+        if weight > 1.0: # ENet type mask weighting
+            p_class = tf.reduce_sum(tf.nn.softmax(logits) * _labels_oh, axis=-1)
+            # NOTE: second term in denominator below ensures lower bound is 1
+            w_class = tf.math.divide(
+                    1.0, tf.math.log(weight + (_EULER-weight)*p_class)
+            )
+            # Apply weighting
+            loss = tf.math.multiply(loss, w_class, name="LossWeighting")
+        # Do the mean in two takes: sum over batch dimension,
         # then divide by mask/weight sum and reduce over spatial 
         # dimension with higher precission.
-        loss = tf.reduce_sum(loss, axis=0, name="BatchMeanCrossEntropy")
+        loss = tf.reduce_sum(loss, axis=0, name="BatchCrossEntropy")
         # Cast to float64, spatial dimensions can make the numeric
         # errors severe for high resolution images
         loss = tf.cast(loss, tf.float64)

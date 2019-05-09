@@ -63,7 +63,7 @@ def main(args):
             val_batches   = (val_examples - 1)//params["batch_size"] + 1
 
             # Get iterator outputs
-            train_image, train_label, train_mask = train_input.get_output()
+            _, train_image, train_label, train_mask = train_input.get_output()
             val_image, val_label, val_mask = val_input.get_output()
 
         # Create step variables

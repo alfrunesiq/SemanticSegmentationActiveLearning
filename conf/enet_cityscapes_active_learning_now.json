@@ -1,6 +1,6 @@
 {
     "batch_size" : 8,
-    "epochs"     : 100,
+    "epochs"     : 20,
     "hyperparams" : {
         "__doc__" : [
             "Training hyperparameters"
@@ -19,7 +19,7 @@
             "glorot_scaling" : false
         },
         "softmax" : {
-            "label_smoothing"    : 0.05,
+            "label_smoothing"    : 0.0,
             "loginverse_scaling" : 0.0,
             "multiscale"         : false
         }
@@ -30,8 +30,8 @@
         ],
         "model" : "ENet",
         "input" : {
-            "height" : 432,
-            "width"  : 648
+            "height" : 512,
+            "width"  : 1024
         }
     },
     "active_learning": {
@@ -48,14 +48,17 @@
             "selection_size - how many examples to annotate each iteration",
             "measure - kind of confidence measure {entropy,margin,confidence}",
             "threshold - parameter for thresholding confidence image for",
-            "            pseudo labelling process"
+            "            pseudo labelling process",
+            "epochs/warm_up - initial epochs to run before start counting"
+
         ],
-        "iterations"                  : -1,
-        "num_initially_labelled"      : -1,
-        "num_validation"              : 170,
-        "pseudo_labelling_proportion" : 0.5,
+        "iterations"                  : 55,
+        "num_initially_labelled"      : 50,
+        "num_validation"              : 270,
+        "pseudo_labelling_proportion" : 0.25,
         "selection_size"              : 50,
         "measure"                     : "entropy",
-        "threshold"                   : 0.95
+        "threshold"                   : 0.9,
+        "epochs/warm_up"              : 50
     }
 }

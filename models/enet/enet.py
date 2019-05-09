@@ -12,6 +12,7 @@ class ENet(Model):
                  alpha_initializer=tf.initializers.constant(0.25),
                  weight_regularization=None, # tf.keras.regularizers.l2(2e-4),
                  regularization_scaling=False,
+                 drop_rates=[0.01, 0.1, 0.1, 0.1, 0.1],
                  name="ENet"):
         """
         :param classes:                number of output classes
@@ -22,6 +23,10 @@ class ENet(Model):
         :param alpha_initializer:      PReLU weight initialization scheme
         :param name:                   name of model scope
         """
+        if len(drop_rates) != 5:
+            raise ValueError(
+                    "Illegal argument value @drop_rates, length must be 5."
+                )
 
         self.classes = classes
         super(ENet, self).__init__(name=name)
@@ -32,7 +37,7 @@ class ENet(Model):
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
-            regularization_scaling=regularization_scaling,
+            regularization_scaling=regularization_scaling
         )
 
         # Stage 1
@@ -42,35 +47,35 @@ class ENet(Model):
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.01)
+            drop_rate=drop_rates[0])
         self.Bottleneck1_1 = mod.Bottleneck(
             64, name="Bottleneck1_1",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.01)
+            drop_rate=drop_rates[0])
         self.Bottleneck1_2 = mod.Bottleneck(
             64, name="Bottleneck1_2",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.01)
+            drop_rate=drop_rates[0])
         self.Bottleneck1_3 = mod.Bottleneck(
             64, name="Bottleneck1_3",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.01)
+            drop_rate=drop_rates[0])
         self.Bottleneck1_4 = mod.Bottleneck(
             64, name="Bottleneck1_4",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.01)
+            drop_rate=drop_rates[0])
 
         # Stage 2
         self.Bottleneck2_0 = mod.BottleneckDownsample(
@@ -79,63 +84,63 @@ class ENet(Model):
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_1 = mod.Bottleneck(
             128, name="Bottleneck2_1",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_2 = mod.Bottleneck(
             128, name="Bottleneck2_2", dilation_rate=(2,2),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_3 = mod.Bottleneck(
             128, name="Bottleneck2_3", asymmetric=True, kernel_size=(5,5),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_4 = mod.Bottleneck(
             128, name="Bottleneck2_4", dilation_rate=(4,4),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_5 = mod.Bottleneck(
             128, name="Bottleneck2_5",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_6 = mod.Bottleneck(
             128, name="Bottleneck2_6", dilation_rate=(8,8),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_7 = mod.Bottleneck(
             128, name="Bottleneck2_7", asymmetric=True, kernel_size=(5,5),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
         self.Bottleneck2_8 = mod.Bottleneck(
             128, name="Bottleneck2_8", dilation_rate=(16,16),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[1])
 
         # Stage 3
         self.Bottleneck3_1 = mod.Bottleneck(
@@ -144,56 +149,56 @@ class ENet(Model):
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_2 = mod.Bottleneck(
             128, name="Bottleneck3_2", dilation_rate=(2,2),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_3 = mod.Bottleneck(
             128, name="Bottleneck3_3", asymmetric=True, kernel_size=(5,5),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_4 = mod.Bottleneck(
             128, name="Bottleneck3_4", dilation_rate=(4,4),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_5 = mod.Bottleneck(
             128, name="Bottleneck3_5",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_6 = mod.Bottleneck(
             128, name="Bottleneck3_6", dilation_rate=(8,8),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_7 = mod.Bottleneck(
             128, name="Bottleneck3_7", asymmetric=True, kernel_size=(5,5),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
         self.Bottleneck3_8 = mod.Bottleneck(
             128, name="Bottleneck3_8", dilation_rate=(16,16),
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[2])
 
         # Stage 4
         self.Bottleneck4_0 = mod.BottleneckUpsample(
@@ -202,21 +207,21 @@ class ENet(Model):
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[3])
         self.Bottleneck4_1 = mod.Bottleneck(
             64, name="Bottleneck4_1",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[3])
         self.Bottleneck4_2 = mod.Bottleneck(
             64, name="Bottleneck4_2",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[3])
 
         # Stage 5
         self.Bottleneck5_0 = mod.BottleneckUpsample(
@@ -225,14 +230,14 @@ class ENet(Model):
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[4])
         self.Bottleneck5_1 = mod.Bottleneck(
             16, name="Bottleneck5_1",
             kernel_initializer=kernel_initializer,
             alpha_initializer=alpha_initializer,
             kernel_regularizer=weight_regularization,
             regularization_scaling=regularization_scaling,
-            drop_rate=0.1)
+            drop_rate=drop_rates[4])
 
         # Final UpConv
         self.Final = mod.Final(self.classes,

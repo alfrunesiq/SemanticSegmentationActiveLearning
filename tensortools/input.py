@@ -268,7 +268,10 @@ class InputStage:
         image_stack.set_shape(stack_shape)
 
         if augment:
-            image, label, mask = self._default_augmentation(image_stack)
+            # NOTE extra argument @image_dist
+            image, image_dist, label, mask = \
+                    self._default_augmentation(image_stack)
+            ret = image, image_dist, label, mask, *other_outputs
         else:
             # TODO: move this to a separate function "_default_no_augmentation"
             # Height and width need not be the same accross samples
@@ -287,7 +290,7 @@ class InputStage:
                                                  name="ToFloat")
             # Generate mask of valid labels (and squeeze unary 3rd-dim)
             label, mask = generate_mask(label)
-        ret = image, label, mask, *other_outputs
+            ret = image, label, mask, *other_outputs
         return ret
 
     def _default_augmentation(self, images):
@@ -317,12 +320,13 @@ class InputStage:
                                                  name="ToFloat")
 
             # Apply random channel scaling
-            image = tf.multiply(image, px_scaling, name="RandomPixelScaling")
-            image = tf.clip_by_value(image, 0.0, 1.0,
-                                     name="RandomPixelScaling/Clip")
+            image_dist = tf.multiply(image, px_scaling, 
+                                     name="RandomPixelScaling")
+            image_dist = tf.clip_by_value(image_dist, 0.0, 1.0,
+                                          name="RandomPixelScaling/Clip")
             # Generate mask
             label, mask = generate_mask(label)
-        return image, label, mask
+        return image, image_dist, label, mask
 
 class NumpyCapsule:
     def __init__(self, shuffle=True):
@@ -338,6 +342,7 @@ class NumpyCapsule:
         self._sample_set = []   # treat the difference of @_indices and
                                 # @_full_range as sample set
         self._sample_size = 0
+        self._sample_prob = None
 
     @property
     def feed_dict(self):
@@ -348,7 +353,8 @@ class NumpyCapsule:
             if self._sample_size > 0:
                 rand_indices = np.random.choice(self._sample_set, 
                                                 self._sample_size,
-                                                replace=False)
+                                                replace=False,
+                                                p=self._sample_prob)
                 indices = np.concatenate((indices, rand_indices))
             np.random.shuffle(indices)
             for name in self._placeholders:
@@ -360,7 +366,7 @@ class NumpyCapsule:
                         self._feed_dict[self._indices]
         return feed_dict
 
-    def set_indices(self, indices=None):
+    def set_indices(self, indices=None, sample_indices=None, sample_prob=None):
         """
         Manually set indeces to use subset of values.
         :param indices: indices set of values to be used.
@@ -372,12 +378,19 @@ class NumpyCapsule:
                 self._cur_length = self._length
                 self._sample_set = []
                 self._sample_size = 0
+                self._sample_prob = None
             else:
                 self._indices = indices
                 self._cur_length = len(self._indices)
-                self._sample_set = self._full_range[np.isin(self._full_range, 
-                                                            self._indices, 
-                                                            invert=True)]
+                if sample_indices is None:
+                    self._sample_set = self._full_range[np.isin(self._full_range, 
+                                                                self._indices, 
+                                                                invert=True)]
+                else:
+                    self._sample_set = sample_indices
+                    if sample_prob is not None:
+                        if len(sample_prob) == len(self._sample_set):
+                            self._sample_prob = sample_prob
         finally:
             self._setattr = True
 

@@ -1,10 +1,11 @@
 {
     "batch_size" : 8,
-    "epochs"     : 25,
+    "epochs"     : 20,
     "hyperparams" : {
         "__doc__" : [
             "Training hyperparameters"
         ],
+        "dropout_rates"       : [0.01, 0.1, 0.1, 0.1, 0.1],
         "learning_rate"       : 5e-4,
         "learning_rate_decay" : 0.0,
         "optimizer"           : {
@@ -20,7 +21,7 @@
         "softmax" : {
             "label_smoothing"    : 0.0,
             "loginverse_scaling" : 0.0,
-            "multiscale"         : true
+            "multiscale"         : false
         }
     },
     "network": {
@@ -47,7 +48,8 @@
             "selection_size - how many examples to annotate each iteration",
             "measure - kind of confidence measure {entropy,margin,confidence}",
             "threshold - parameter for thresholding confidence image for",
-            "            pseudo labelling process"
+            "            pseudo labelling process",
+            "epochs/warm_up - initial epochs to run before start counting"
         ],
         "iterations"                  : 55,
         "num_initially_labelled"      : 50,
@@ -55,6 +57,7 @@
         "pseudo_labelling_proportion" : 0,
         "selection_size"              : -50,
         "measure"                     : "entropy",
-        "threshold"                   : 0.95
+        "threshold"                   : 0.9,
+        "epochs/warm_up"              : 50
     }
 }
