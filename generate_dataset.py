@@ -255,7 +255,6 @@ def main(args):
             os.makedirs(args.output_dir)
 
     file_associations = dataset.file_associations(args.data_dir)
-    print(file_associations)
     sess = tf.Session()
     for split in file_associations:
         # Create path to split

@@ -167,7 +167,8 @@ class InputStage:
                     "image/data" : tf.io.FixedLenFeature((),tf.string,""),
                     "label"      : tf.io.FixedLenFeature((),tf.string,""),
                     "height"     : tf.io.FixedLenFeature((),tf.int64 ,-1),
-                    "width"      : tf.io.FixedLenFeature((),tf.int64 ,-1)
+                    "width"      : tf.io.FixedLenFeature((),tf.int64 ,-1),
+                    "id"         : tf.io.FixedLenFeature((),tf.string,"")
                 }
                 ret = tf.io.parse_single_example(
                     path, fmt, name="ParseExample"), *aux

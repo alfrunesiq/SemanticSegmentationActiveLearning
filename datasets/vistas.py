@@ -27,7 +27,6 @@ labels = [
     Label( "parking"                 , 10 ,     255 ,           9 , (250, 170, 160) ),
     Label( "pedestrian area"         , 11 ,       1 ,           7 , ( 96,  96,  96) ),
     Label( "rail track"              , 12 ,     255 ,          10 , (230, 150, 140) ),
-    Label( "road"                    , 13 ,       0 ,           7 , (128,  64, 128) ),
     Label( "service lane"            , 14 ,     255 ,         255 , (110, 110, 110) ),
     Label( "sidewalk"                , 15 ,       1 ,           8 , (244,  35, 232) ),
     Label( "bridge"                  , 16 ,     255 ,          15 , (150, 100, 100) ),
@@ -36,9 +35,10 @@ labels = [
     Label( "person"                  , 19 ,      11 ,          24 , (220,  20,  60) ),
     Label( "bicyclist"               , 20 ,      12 ,          25 , (255,   0,   0) ),
     Label( "motorcyclist"            , 21 ,      12 ,          25 , (255,   0, 100) ),
-    Label( "other rider"             , 22 ,      12 ,          25 , (255,   0, 200) ),
+    Label( "rider"                   , 22 ,      12 ,          25 , (255,   0, 200) ),
     Label( "lane marking - crosswalk", 23 ,     255 ,         255 , (200, 128, 128) ),
     Label( "lane marking - general"  , 24 ,       0 ,           7 , (255, 255, 255) ),
+    Label( "road"                    , 13 ,       0 ,           7 , (128,  64, 128) ),
     Label( "mountain"                , 25 ,     255 ,           4 , ( 64, 170,  64) ),
     Label( "sand"                    , 26 ,     255 ,         255 , (230, 160,  50) ),
     Label( "sky"                     , 27 ,      10 ,          23 , ( 70, 130, 180) ),
@@ -59,12 +59,12 @@ labels = [
     Label( "phone booth"             , 42 ,     255 ,           4 , (142,   0,   0) ),
     Label( "pothole"                 , 43 ,     255 ,         255 , ( 70, 100, 150) ),
     Label( "street light"            , 44 ,     255 ,           0 , (210, 170, 100) ),
-    Label( "pole"                    , 45 ,       5 ,          17 , (153, 153, 153) ),
     Label( "traffic sign frame"      , 46 ,     255 ,         255 , (128, 128, 128) ),
     Label( "utility pole"            , 47 ,       5 ,          17 , (  0,   0,  80) ),
+    Label( "pole"                    , 45 ,       5 ,          17 , (153, 153, 153) ),
     Label( "traffic light"           , 48 ,       6 ,          19 , (250, 170,  30) ),
     Label( "traffic sign (back)"     , 49 ,     255 ,         255 , (192, 192, 192) ),
-    Label( "traffic sign (front)"    , 50 ,       7 ,          20 , (220, 220,   0) ),
+    Label( "traffic sign"            , 50 ,       7 ,          20 , (220, 220,   0) ),
     Label( "trash can"               , 51 ,     255 ,           4 , (140, 140,  20) ),
     Label( "bicycle"                 , 52 ,      18 ,          33 , (119,  11,  32) ),
     Label( "boat"                    , 53 ,     255 ,         255 , (150,   0, 255) ),
@@ -87,6 +87,7 @@ class Vistas:
 
         # Embedding from label image to train id
         self._embedding = None
+        self._name_embedding = None
         self._colormap  = np.ones((256,3), dtype=np.uint8)*255
         for label in labels:
             self._colormap[label.trainId] = label.color
@@ -119,6 +120,15 @@ class Vistas:
             for label in labels:
                 self._colormap[label.trainId] = label.color
         return self._colormap
+
+    @property
+    def name_embedding(self):
+        if self._name_embedding is None:
+            self._name_embedding = [""] * self.num_classes
+            for label in labels:
+                if label.trainId != 255:
+                    self._name_embedding[label.trainId] = (label.name)
+        return self._name_embedding
 
     @property
     def num_classes(self):
