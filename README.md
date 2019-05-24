@@ -1,4 +1,4 @@
-# master-src
+# Semantic Segmentation & Active Learning
 File Structure:  
 ```
 .
