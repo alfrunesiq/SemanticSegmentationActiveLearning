@@ -326,7 +326,6 @@ if __name__ == "__main__":
                         dest="aspect",
                         required=False,
                         help="Downscaling factor.")
-    # TODO: make this a little nicer
     parser.add_argument("--use-coarse",
         action="store_true",
         dest="use_coarse",

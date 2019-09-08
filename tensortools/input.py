@@ -274,7 +274,6 @@ class InputStage:
                     self._default_augmentation(image_stack)
             ret = image, image_dist, label, mask, *other_outputs
         else:
-            # TODO: move this to a separate function "_default_no_augmentation"
             # Height and width need not be the same accross samples
             center = [tf.cast(example["height"]//2, tf.int32),
                       tf.cast(example["width"]//2, tf.int32)]

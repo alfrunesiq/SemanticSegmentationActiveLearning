@@ -239,7 +239,10 @@ def main(args):
                     return 1
                 logger.info("Resuming from checkpoint \"%s\"" % ckpt)
                 status = checkpoint.restore(ckpt)
-                status.assert_existing_objects_matched()
+                if tf.__version__ < "1.14.0":
+                    status.assert_existing_objects_matched()
+                else:
+                    status.expect_partial()
                 status.initialize_or_restore(sess)
 
             elif tf.train.latest_checkpoint(args.log_dir) != None:
@@ -247,7 +250,10 @@ def main(args):
                 ckpt = tf.train.latest_checkpoint(args.log_dir)
                 logger.info("Resuming from checkpoint \"%s\"" % ckpt)
                 status = checkpoint.restore(ckpt)
-                status.assert_existing_objects_matched()
+                if tf.__version__ < "1.14.0":
+                    status.assert_existing_objects_matched()
+                else:
+                    status.expect_partial()
                 status.initialize_or_restore(sess)
 
             with tf.name_scope("UpdateValidationWeights"):

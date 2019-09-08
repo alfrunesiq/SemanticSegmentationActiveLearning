@@ -3,7 +3,10 @@ import os
 
 import tensorflow as tf
 from tensorflow.python.training import checkpoint_management
-from tensorflow.python.training.checkpointable import data_structures
+if tf.__version__ < "1.14.0":
+    from tensorflow.python.training.checkpointable import data_structures
+else:
+    from tensorflow.python.training.tracking import data_structures
 
 class CheckpointManager(object):
 

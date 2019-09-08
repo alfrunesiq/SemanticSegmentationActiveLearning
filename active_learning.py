@@ -27,6 +27,9 @@ except ImportError:
     else:
         raise ImportError("Could not import tkinter, make sukre Tk "
                           "dependencies are installed")
+except Exception as e:
+    print(e)
+    pass
 
 # User includes
 import models
@@ -138,7 +141,6 @@ def main(args, logger):
         unlabelled       = np.array(state["dataset"]["train"]["unlabelled"])
         no_label_indices = np.array(state["dataset"]["train"]["no_label"])
 
-    # TODO dump this into log dir, and dump modified version in log subdirs
     train_input_labelled = np.full_like(train_examples, False, dtype=bool)
     train_input_labelled[labelled] = True
     train_input_indices = np.arange(len(train_examples))
@@ -433,7 +435,6 @@ def main(args, logger):
         logger.debug("Initializing variables...")
         sess.run(tf.global_variables_initializer())
 
-        # TODO read json file giving current progression and filenames
 
         # Create checkpoint object
         with tf.name_scope("Checkpoint"):
@@ -452,7 +453,10 @@ def main(args, logger):
                     return 1
                 logger.info("Resuming from checkpoint \"%s\"" % ckpt)
                 status = checkpoint.restore(ckpt)
-                status.assert_existing_objects_matched()
+                if tf.__version__ < "1.14.0":
+                    status.assert_existing_objects_matched()
+                else:
+                    status.expect_partial()
                 status.initialize_or_restore(sess)
                 if args.reinitialize_output:
                     sess.run(train_net.Final.kernel.initializer)
@@ -462,7 +466,10 @@ def main(args, logger):
                 ckpt = state["checkpoint"]
                 logger.info("Resuming from checkpoint \"%s\"" % ckpt)
                 status = checkpoint.restore(ckpt)
-                status.assert_existing_objects_matched()
+                if tf.__version__ < "1.14.0":
+                    status.assert_existing_objects_matched()
+                else:
+                    status.expect_partial()
                 status.initialize_or_restore(sess)
 
             with tf.name_scope("UpdateValidationWeights"):
@@ -771,7 +778,6 @@ def main(args, logger):
                 train_input.set_indices()
                 if alparams["selection_size"] > 0:
                     low_conf_examples, unlabelled_conf = rank_confidence()
-                    # TODO: add summary here
                     _hist_summary = sess.run(conf_summary,
                                              {conf_summary_ph: 
                                               unlabelled_conf})

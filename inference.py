@@ -84,12 +84,12 @@ def main(args):
 
     # Create network and input stage
     net = models.ENet(dataset.num_classes)
-    input_stage = tt.input.InputStage(1, input_shape=[height, width, channels])
+    input_stage = tt.input.InputStage(input_shape=[height, width, channels])
     # Add test set to input stage
-    num_examples = input_stage.add_dataset("test", data_dir,
+    num_examples = input_stage.add_dataset("test", data_dir, batch_size=1,
                                            decode_fn=decode_fn)
 
-    input_image, file_id = input_stage.get_output("test")
+    input_image, file_id = input_stage.get_output()
     input_image = tf.expand_dims(input_image, axis=0)
 
     logits = net(input_image, training=False)
@@ -97,13 +97,16 @@ def main(args):
     if args.size is not None:
         p_class = tf.image.resize_bilinear(logits, args.size)
     pred = tf.math.argmax(p_class, axis=-1)
-    pred = tf.expand_dims(pred, axis=-1)
     # Do the reverse embedding from trainId to dataset id
-    embedding  = tf.constant(dataset.embedding_reversed, dtype=tf.uint8)
-    pred_embed = tf.gather_nd(embedding, pred)
-    # Expand lost dimension
-    pred_embed = tf.expand_dims(pred_embed, axis=-1)
-
+    if not args.color:
+        pred = tf.expand_dims(pred, axis=-1)
+        embedding  = tf.constant(dataset.embedding_reversed, dtype=tf.uint8)
+        pred_embed = tf.gather_nd(embedding, pred)
+        # Expand lost dimension
+        pred_embed = tf.expand_dims(pred_embed, axis=-1)
+    else:
+        pred_embed = tf.gather(dataset.colormap, tf.cast(pred, tf.int32))
+        pred_embed = tf.cast(pred_embed, tf.uint8)
     # Encode output image
     pred_encoding = tf.image.encode_png(pred_embed[0])
 
@@ -115,10 +118,15 @@ def main(args):
     filepath = tf.string_join([output_dir, filename], separator="/")
     write_file = tf.io.write_file(filepath, pred_encoding)
 
+    print("Loading checkpoint")
     # Restore model from checkpoint (@args.ckpt)
     ckpt = tf.train.Checkpoint(model=net)
     status = ckpt.restore(args.ckpt)
-    status.assert_existing_objects_matched()
+    print("Checkpoint loaded")
+    if tf.__version__ < "1.14.0":
+        status.assert_existing_objects_matched()
+    else:
+        status.expect_partial()
 
     # Create session and restore model
     sess = tf.Session()
@@ -173,6 +181,11 @@ if __name__ == "__main__":
                         default=None,
                         help="Size of the output images."
     )
+    parser.add_argument("--color",
+                        action="store_true",
+                        required=False,
+                        default=False,
+                        dest="color")
     args = parser.parse_args()
 
     logger = logging.getLogger(__name__)

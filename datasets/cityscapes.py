@@ -216,7 +216,6 @@ class Cityscapes:
                 # Update path to {city} scope
                 image_path_city = os.path.join(image_path_split, city)
                 label_path_city = os.path.join(label_path_split, city)
-                # TODO this could be vectorized
                 for filename in os.listdir(label_path_city):
                     label_id = filename.split("_")
                     # file_id = [city, seq, frame, type, ext]
@@ -236,7 +235,7 @@ class Cityscapes:
                     _file_associations[split][file_id]["label"] = label_path
 
         # Treat test samples separately as they don't contain any labels
-        image_path_split = os.path.join(image_path_base, split)
+        image_path_split = os.path.join(image_path_base, "test")
         for root, dirs, filenames in os.walk(image_path_split):
             for filename in filenames:
                 label_id = filename.split("_")
