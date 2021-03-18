@@ -1,7 +1,7 @@
 import glob
 import os
 
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 from tensorflow.python.training import checkpoint_management
 if tf.__version__ < "1.14.0":
     from tensorflow.python.training.checkpointable import data_structures

@@ -2,7 +2,7 @@ import argparse
 import collections
 import csv
 
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 
 def main(args):
     summary_iterator = tf.train.summary_iterator(args.filename)

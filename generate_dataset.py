@@ -5,7 +5,9 @@ import sys
 
 _NUM_CPUS = multiprocessing.cpu_count()
 
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
+tf.disable_eager_execution()
+
 import tqdm
 
 import datasets

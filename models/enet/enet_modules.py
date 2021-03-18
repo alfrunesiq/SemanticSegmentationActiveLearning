@@ -1,7 +1,7 @@
 import numpy as np
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 
-from tensorflow.keras.layers    import Layer
+from tensorflow.compat.v1.keras.layers import Layer
 from tensorflow.python.training import moving_averages
 
 from ..util import extra_ops as xops

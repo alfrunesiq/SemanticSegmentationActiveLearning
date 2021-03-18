@@ -7,8 +7,10 @@ import os
 import pprint
 import sys
 
-# Non-standard includes
-import tensorflow as tf
+# Run tensorflow in good old v1 ("Graph mode")
+from tensorflow.compat import v1 as tf
+tf.disable_eager_execution()
+
 # Maybe import tqdm
 show_progress = False
 try:

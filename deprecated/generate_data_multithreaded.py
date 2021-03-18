@@ -12,7 +12,7 @@ import argparse
 from functools import partial
 
 import numpy as np
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["CUDA_VISIBLE_DEVICES"] = ""

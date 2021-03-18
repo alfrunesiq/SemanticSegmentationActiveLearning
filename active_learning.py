@@ -9,24 +9,16 @@ import sys
 
 # Non-standard includes
 import numpy as np
-import tensorflow as tf
-# Maybe import tqdm
-show_progress = False
-try:
-    import tqdm
-    show_progress = True
-except ImportError:
-    pass
+from tensorflow.compat import v1 as tf
+tf.disable_eager_execution()
+import tqdm
 
 try:
     import tkinter
     tkinter.Tk().withdraw()
 except ImportError:
-    if args.unlabelled == None:
-        pass
-    else:
-        raise ImportError("Could not import tkinter, make sukre Tk "
-                          "dependencies are installed")
+    raise ImportError("Could not import tkinter, make sukre Tk "
+                      "dependencies are installed")
 except Exception as e:
     print(e)
     pass
@@ -267,7 +259,7 @@ def main(args, logger):
                                                  dtype=train_label.dtype),
                                    tf.ones_like(pseudo_label,
                                                 dtype=train_label.dtype))
-            # Pseudo annotation logic (think of it as @tf.cond maped 
+            # Pseudo annotation logic (think of it as @tf.cond maped
             # over batch dimension)
             train_label = tf.where(train_labelled, train_label,
                                    pseudo_label, name="MaybeGenLabel")
@@ -377,7 +369,7 @@ def main(args, logger):
                         family="PseudoLabel"
                     ),
                     tf.summary.image(
-                        "PseudoLabel", 
+                        "PseudoLabel",
                         tf.gather(dataset.colormap,
                                   tf.cast(pseudo_label*pseudo_mask \
                                   + (1 - pseudo_mask)*255,
@@ -543,12 +535,13 @@ def main(args, logger):
                 epoch = sess.run(epoch_step_inc)
 
                 # Prepare inner loop iterator
-                _iter = range(0, num_iter_per_epoch, params["batch_size"])
-                if show_progress:
-                    _iter = tqdm.tqdm(_iter, desc="%s[%d]" % (run_name, epoch),
-                                      dynamic_ncols=True,
-                                      ascii=True,
-                                      postfix={"NIC": no_improvement_count})
+                _iter = tqdm.tqdm(
+                    range(0, num_iter_per_epoch, params["batch_size"]),
+                    desc="%s[%d]" % (run_name, epoch),
+                    dynamic_ncols=True,
+                    ascii=True,
+                    postfix={"NIC": no_improvement_count}
+                )
 
                 # Initialize iterators
                 train_input_stage.init_iterator(
@@ -633,8 +626,7 @@ def main(args, logger):
                                    _initial_grace_period < 0:
                                     _iter.close()
                                     break
-                            if show_progress:
-                                _iter.set_postfix(NIC=no_improvement_count)
+                            _iter.set_postfix(NIC=no_improvement_count)
                             # Pop fetches to prohibit OutOfRangeError due to
                             # asymmetric train-/val- input size.
                             _fetches.pop("val")
@@ -655,11 +647,12 @@ def main(args, logger):
             _step = len(labelled)
             # Initialize validation input stage with test set
             val_input_stage.init_iterator("test", sess, test_input.feed_dict)
-            _iter = range(0, test_input.size, params["batch_size"])
-            if show_progress:
-                _iter = tqdm.tqdm(_iter, desc="test[%d]" % (_step),
-                                  ascii=True,
-                                  dynamic_ncols=True)
+            _iter = tqdm.tqdm(
+                range(0, test_input.size, params["batch_size"]),
+                desc="test[%d]" % (_step),
+                ascii=True,
+                dynamic_ncols=True
+            )
             summary_proto = None
             val_metrics.reset_metrics(sess)
             try:
@@ -686,11 +679,12 @@ def main(args, logger):
             # Initialize input stage
             train_input_stage.init_iterator("train", sess,
                                             train_input.feed_dict)
-            _iter = range(0, train_input.size, params["batch_size"])
-            if show_progress:
-                _iter = tqdm.tqdm(_iter, desc="ranking[%d]" % len(labelled),
-                                  ascii=True,
-                                  dynamic_ncols=True)
+            _iter = tqdm.tqdm(
+                range(0, train_input.size, params["batch_size"]),
+                desc="ranking[%d]" % len(labelled),
+                ascii=True,
+                dynamic_ncols=True
+            )
             try:
                 for i in _iter:
                     # Loop over all examples and compute confidence
@@ -779,7 +773,7 @@ def main(args, logger):
                 if alparams["selection_size"] > 0:
                     low_conf_examples, unlabelled_conf = rank_confidence()
                     _hist_summary = sess.run(conf_summary,
-                                             {conf_summary_ph: 
+                                             {conf_summary_ph:
                                               unlabelled_conf})
                     test_writer.add_summary(_hist_summary, state["iteration"])
                 else:
@@ -800,7 +794,7 @@ def main(args, logger):
                     to_annotate = train_examples[to_annotate_indices]
                     # Poll user for filenames of annotated examples
                     logger.info("Please annotate the following examples:\n%s" %
-                                "\n".join(to_annotate_basename.tolist()))
+                                "\n".join(to_annotate.tolist()))
                     filenames = tkinter.filedialog.askopenfilename(
                         multiple=1,
                         filetypes=(("TFRecord", "*.tfrecord"),))

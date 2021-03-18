@@ -1,6 +1,5 @@
-import tensorflow as tf
-
-from tensorflow.keras import Model
+from tensorflow.compat import v1 as tf
+from tensorflow.compat.v1.keras import Model
 from . import enet_modules as mod
 
 class ENet(Model):
@@ -304,6 +303,7 @@ class ENet(Model):
             self.bottleneck5_1 = []
 
             self.final = []
+            self.outputs = []
         finally:
             self._setattr_tracking = True
         self.built = True

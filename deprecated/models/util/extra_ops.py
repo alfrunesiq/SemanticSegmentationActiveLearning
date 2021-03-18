@@ -1,4 +1,4 @@
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 from tensorflow.python.training import moving_averages
 from tensorflow.python.client   import device_lib
 _LOCAL_DEVICE_PROTOS = device_lib.list_local_devices()

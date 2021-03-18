@@ -1,2 +1,2 @@
-tensorflow-gpu==1.13.2
+tensorflow-gpu==2.4.1
 tqdm<=4.59.0

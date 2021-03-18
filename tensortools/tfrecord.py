@@ -1,6 +1,6 @@
 import struct
 
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.descriptor import FieldDescriptor
 

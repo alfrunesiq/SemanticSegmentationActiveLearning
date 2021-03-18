@@ -7,7 +7,7 @@ import os
 import sys
 
 # Non-standard includes
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 # Maybe import tqdm
 show_progress = False
 try:

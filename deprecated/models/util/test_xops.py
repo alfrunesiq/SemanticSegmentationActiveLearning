@@ -1,5 +1,5 @@
 import numpy as np
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 
 import extra_ops as xops
 

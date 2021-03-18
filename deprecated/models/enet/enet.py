@@ -1,4 +1,4 @@
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 
 from . import enet_modules as eblk
 from .._model import Model

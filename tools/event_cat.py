@@ -10,7 +10,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 import struct
 
 output_filename = args.input_files[0] + ".cat"

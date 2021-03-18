@@ -9,7 +9,9 @@ import multiprocessing
 import os
 import sys
 
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
+tf.disable_eager_mode()
+
 import matplotlib.pyplot as plt
 
 import models

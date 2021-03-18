@@ -7,7 +7,7 @@ import os
 from functools import partial
 
 import numpy as np
-import tensorflow as tf
+from tensorflow.compat import v1 as tf
 from google.protobuf.json_format import MessageToJson
 
 from . import tfrecord
